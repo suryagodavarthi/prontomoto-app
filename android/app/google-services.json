@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "603417356334",
+    "project_id": "prontomoto-d4547",
+    "storage_bucket": "prontomoto-d4547.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:603417356334:android:b3bb1c38c8db1eb54397bf",
+        "android_client_info": {
+          "package_name": "com.example.prontomoto_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAIC_bycfhhgHqyx4wBh-HxeUAehqZqFiY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
