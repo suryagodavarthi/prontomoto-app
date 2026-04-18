@@ -317,16 +317,28 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
     _loadFullDetails();
   }
 
+  // --- SAFE CONTEXT HELPER ---
+  Map<String, String> _getSafeContext() {
+    var d = {...widget.summaryData, ..._fullData};
+    String id = widget.summaryData['valuationId']?.toString() ?? widget.summaryData['id']?.toString() ?? "";
+    
+    String vNo = _regNoController.text.trim();
+    if (vNo.isEmpty) vNo = _val(d, ['VehicleNumber', 'vehicleNumber', 'RegistrationNumber']);
+    if (vNo.isEmpty) vNo = "UNKNOWN";
+    
+    String contact = _val(d, ['ApplicantContact', 'applicantContact']);
+    if (contact.isEmpty) contact = "0000000000";
+    
+    return {"id": id, "vNo": vNo, "contact": contact};
+  }
+
   Future<void> _loadFullDetails() async {
-    String id = widget.summaryData['valuationId'] ?? widget.summaryData['id'] ?? "";
-    String vNo = widget.summaryData['vehicleNumber'] ?? "";
-    String contact = widget.summaryData['applicantContact'] ?? "";
+    var ctx = _getSafeContext();
+    if (ctx["id"]!.isEmpty) { setState(() => _isLoading = false); return; }
 
-    if (id.isEmpty) { setState(() => _isLoading = false); return; }
-
-    var details = await api.getBackendVehicleDetails(id, vNo, contact); 
-    var stakeholderDetails = await api.getValuationDetails(id, vNo, contact); 
-    var fetchedNotes = await api.getNotes(id);
+    var details = await api.getBackendVehicleDetails(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!); 
+    var stakeholderDetails = await api.getValuationDetails(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!); 
+    var fetchedNotes = await api.getNotes(ctx["id"]!);
 
     if (mounted) {
       setState(() {
@@ -345,7 +357,7 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
   void _populateControllers() {
     var d = _fullData;
 
-    _regNoController.text = _val(d, ['RegistrationNumber', 'registrationNumber', 'vehicleNumber']);
+    _regNoController.text = _val(d, ['RegistrationNumber', 'registrationNumber', 'vehicleNumber', 'VehicleNumber']);
     _makeController.text = _val(d, ['Make', 'make']);
     _modelController.text = _val(d, ['Model', 'model']);
     _colorController.text = _val(d, ['Colour', 'colour', 'color']);
@@ -414,7 +426,7 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
     } catch (e) {}
   }
 
-  // --- ROBUST EXTRACTOR ---
+  // ROBUST EXTRACTOR
   String _val(Map<String, dynamic> d, List<String> keys) {
     for (String key in keys) {
       // 1. Direct match
@@ -468,141 +480,161 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
     await _performUpdate(isSubmit: true);
   }
 
-  Map<String, String> _getSafeContext() {
-    var d = {...widget.summaryData, ..._fullData};
-    String id = widget.summaryData['valuationId'] ?? widget.summaryData['id'] ?? "";
-    
-    String vNo = _regNoController.text.trim();
-    if (vNo.isEmpty) vNo = _val(d, ['VehicleNumber', 'vehicleNumber', 'RegistrationNumber']);
-    if (vNo.isEmpty) vNo = "UNKNOWN";
-    
-    String contact = _val(d, ['ApplicantContact', 'applicantContact']);
-    if (contact.isEmpty) contact = "0000000000";
-    
-    return {"id": id, "vNo": vNo, "contact": contact};
-  }
-
   Future<void> _performUpdate({required bool isSubmit}) async {
-    var ctx = _getSafeContext();
+    // -------------------------------------------------------------
+    // WRAPPED IN TRY-CATCH TO PREVENT INFINITE SPINNERS
+    // -------------------------------------------------------------
+    try {
+      var ctx = _getSafeContext();
 
-    Map<String, dynamic> vehicleData = {
-      "RegistrationNumber": _regNoController.text,
-      "Make": _makeController.text,
-      "Model": _modelController.text,
-      "Colour": _colorController.text,
-      "Fuel": _selectedFuel,
-      "BodyType": _bodyTypeController.text,
-      "ClassOfVehicle": _classVehicleController.text,
-      "NormsType": _normsTypeController.text,
-      "OwnerSerialNo": _ownerSerialController.text,
-      "YearOfMfg": int.tryParse(_mfgYearController.text) ?? 0,
-      "MonthOfMfg": int.tryParse(_mfgMonthController.text) ?? 0,
-      "EngineNumber": _engineNoController.text,
-      "ChassisNumber": _chassisNoController.text,
-      "EngineCC": int.tryParse(_engineCcController.text) ?? 0,
-      "GrossVehicleWeight": double.tryParse(_grossWeightController.text) ?? 0.0,
-      "SeatingCapacity": int.tryParse(_seatingController.text) ?? 0,
-      "DateOfRegistration": _regDateController.text,
-      "Rto": _rtoController.text,
-      "MakerVariant": _makerVariantController.text,
-      "CategoryCode": _categoryCodeController.text,
-      "OwnerName": _ownerNameController.text,
-      "PresentAddress": _presentAddrController.text,
-      "PermanentAddress": _permAddrController.text,
-      "Lender": _lenderController.text,
-      "Hypothecation": _hypothecation,
-      "RcStatus": _rcStatus,
-      "BacklistStatus": _blacklistStatus,
-      "Insurer": _insurerController.text,
-      "InsurancePolicyNo": _policyNoController.text,
-      "InsuranceValidUpTo": _insuranceValidController.text,
-      "IDV": double.tryParse(_idvController.text) ?? 0.0,
-      "PermitNo": _permitNoController.text,
-      "PermitValidUpTo": _permitValidController.text,
-      "PermitType": _permitTypeController.text,
-      "PermitIssuedDate": _permitIssuedController.text,
-      "PermitFrom": _permitFromController.text,
-      "FitnessNo": _fitnessNoController.text,
-      "FitnessValidTo": _fitnessValidController.text,
-      "TaxUpto": _taxUpToController.text,
-      "TaxPaidUpto": _taxPaidController.text,
-      "PollutionCertificateNumber": _pollutionNoController.text,
-      "PollutionCertificateUpto": _pollutionValidController.text,
-      "ExShowroomPrice": double.tryParse(_showroomPriceController.text) ?? 0.0,
-      "ManufacturedDate": _mfgDateController.text,
-      "StencilTraceUrl": _stencilUrlController.text,
-      "ChassisNoPhotoUrl": _chassisUrlController.text,
-      "Remarks": _remarksController.text,
-    };
-
-    var resText = await api.updateBackendVehicleDetails(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, vehicleData);
-    
-    if (!mounted) return;
-
-    if (resText["success"] == false) {
-      setState(() { _isSaving = false; _isSubmitting = false; });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Save Error: ${resText['message']}"), backgroundColor: Colors.red));
-      return; 
-    }
-
-    if (_selectedRcPath != null || _selectedInsurancePath != null || _selectedOtherPath != null) {
-      String s(List<String> keys, [String def = "-"]) { String val = _val(_fullData, keys); return val.isEmpty ? def : val; }
-      String n(List<String> keys) { String val = _val(_fullData, keys); return (val.isEmpty || val.length < 10) ? "9999999999" : val; }
-
-      Map<String, String> safeData = {
-        "ValuationId": ctx["id"]!, "VehicleNumber": ctx["vNo"]!, "Name": s(['Name', 'stakeholderName']), "LocationName": s(['LocationName']),
-        "Pincode": s(['Pincode'], "000000"), "ExecutiveName": s(['ExecutiveName']), "ExecutiveContact": n(['ExecutiveContact']),
-        "ApplicantName": s(['ApplicantName']), "ApplicantContact": n(['ApplicantContact']), "VehicleSegment": s(['VehicleSegment']),
-        "ValuationType": s(['ValuationType']), "Block": s(['Block']), "District": s(['District']), "State": s(['State']), "Country": s(['Country']),
+      Map<String, dynamic> vehicleData = {
+        "RegistrationNumber": _regNoController.text,
+        "Make": _makeController.text,
+        "Model": _modelController.text,
+        "Colour": _colorController.text,
+        "Fuel": _selectedFuel,
+        "BodyType": _bodyTypeController.text,
+        "ClassOfVehicle": _classVehicleController.text,
+        "NormsType": _normsTypeController.text,
+        "OwnerSerialNo": _ownerSerialController.text,
+        "YearOfMfg": int.tryParse(_mfgYearController.text) ?? 0,
+        "MonthOfMfg": int.tryParse(_mfgMonthController.text) ?? 0,
+        "EngineNumber": _engineNoController.text,
+        "ChassisNumber": _chassisNoController.text,
+        "EngineCC": int.tryParse(_engineCcController.text) ?? 0,
+        "GrossVehicleWeight": double.tryParse(_grossWeightController.text) ?? 0.0,
+        "SeatingCapacity": int.tryParse(_seatingController.text) ?? 0,
+        "DateOfRegistration": _regDateController.text,
+        "Rto": _rtoController.text,
+        "MakerVariant": _makerVariantController.text,
+        "CategoryCode": _categoryCodeController.text,
+        "OwnerName": _ownerNameController.text,
+        "PresentAddress": _presentAddrController.text,
+        "PermanentAddress": _permAddrController.text,
+        "Lender": _lenderController.text,
+        "Hypothecation": _hypothecation,
+        "RcStatus": _rcStatus,
+        "BacklistStatus": _blacklistStatus,
+        "Insurer": _insurerController.text,
+        "InsurancePolicyNo": _policyNoController.text,
+        "InsuranceValidUpTo": _insuranceValidController.text,
+        "IDV": double.tryParse(_idvController.text) ?? 0.0,
+        "PermitNo": _permitNoController.text,
+        "PermitValidUpTo": _permitValidController.text,
+        "PermitType": _permitTypeController.text,
+        "PermitIssuedDate": _permitIssuedController.text,
+        "PermitFrom": _permitFromController.text,
+        "FitnessNo": _fitnessNoController.text,
+        "FitnessValidTo": _fitnessValidController.text,
+        "TaxUpto": _taxUpToController.text,
+        "TaxPaidUpto": _taxPaidController.text,
+        "PollutionCertificateNumber": _pollutionNoController.text,
+        "PollutionCertificateUpto": _pollutionValidController.text,
+        "ExShowroomPrice": double.tryParse(_showroomPriceController.text) ?? 0.0,
+        "ManufacturedDate": _mfgDateController.text,
+        "StencilTraceUrl": _stencilUrlController.text,
+        "ChassisNoPhotoUrl": _chassisUrlController.text,
+        "Remarks": _remarksController.text,
       };
-      
-      var resFiles = await api.updateValuation(ctx["id"]!, safeData, rcPath: _selectedRcPath, insurancePath: _selectedInsurancePath, otherPath: _selectedOtherPath);
-      if (resFiles["success"] == false && mounted) {
-         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("File Warning: ${resFiles['message']}"), backgroundColor: Colors.orange));
-      }
-    }
 
-    // NEW FIX: Wait for fresh data before updating state
-    await _loadFullDetails();
-    if (!mounted) return;
+      var resText = await api.updateBackendVehicleDetails(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, vehicleData);
+      
+      if (!mounted) return;
 
-    if (isSubmit) {
-      await api.assignBackendTask(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, _selectedAssignee!); 
-      int stepOrder = widget.summaryData['workflowStepOrder'] ?? widget.summaryData['stepOrder'] ?? 2;
-      
-      var advanceResult = await api.advanceToNextStage(ctx["id"]!, stepOrder, ctx["vNo"]!, ctx["contact"]!);
-      
-      if (mounted) {
+      if (resText["success"] == false) {
         setState(() { _isSaving = false; _isSubmitting = false; });
-        if (advanceResult["success"] == true) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Submitted to AVO Successfully!"), backgroundColor: Colors.green));
-          Navigator.pop(context);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to advance: ${advanceResult['message']}"), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Save Error: ${resText['message']}"), backgroundColor: Colors.red));
+        return; 
+      }
+
+      if (_selectedRcPath != null || _selectedInsurancePath != null || _selectedOtherPath != null) {
+        String s(List<String> keys, [String def = "-"]) { String val = _val(_fullData, keys); return val.isEmpty ? def : val; }
+        String n(List<String> keys) { String val = _val(_fullData, keys); return (val.isEmpty || val.length < 10) ? "9999999999" : val; }
+
+        Map<String, String> safeData = {
+          "ValuationId": ctx["id"]!, "VehicleNumber": ctx["vNo"]!, "Name": s(['Name', 'stakeholderName']), "LocationName": s(['LocationName']),
+          "Pincode": s(['Pincode'], "000000"), "ExecutiveName": s(['ExecutiveName']), "ExecutiveContact": n(['ExecutiveContact']),
+          "ApplicantName": s(['ApplicantName']), "ApplicantContact": n(['ApplicantContact']), "VehicleSegment": s(['VehicleSegment']),
+          "ValuationType": s(['ValuationType']), "Block": s(['Block']), "District": s(['District']), "State": s(['State']), "Country": s(['Country']),
+        };
+        
+        var resFiles = await api.updateValuation(ctx["id"]!, safeData, rcPath: _selectedRcPath, insurancePath: _selectedInsurancePath, otherPath: _selectedOtherPath);
+        if (resFiles["success"] == false && mounted) {
+           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("File Warning: ${resFiles['message']}"), backgroundColor: Colors.orange));
         }
       }
-    } else {
-      // NEW FIX: Exit edit mode only after the UI has the fresh data
-      setState(() { _isSaving = false; _isSubmitting = false; _isEditing = false; });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Saved Successfully!"), backgroundColor: Colors.green));
+
+      if (!mounted) return;
+
+      if (isSubmit) {
+        await api.assignBackendTask(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, _selectedAssignee!); 
+        
+        // NEW FIX: Safely parse workflow step order to prevent crashing
+        int stepOrder = 2;
+        if (widget.summaryData['workflowStepOrder'] != null) {
+          stepOrder = int.tryParse(widget.summaryData['workflowStepOrder'].toString()) ?? 2;
+        } else if (widget.summaryData['stepOrder'] != null) {
+          stepOrder = int.tryParse(widget.summaryData['stepOrder'].toString()) ?? 2;
+        }
+        
+        var advanceResult = await api.advanceToNextStage(ctx["id"]!, stepOrder, ctx["vNo"]!, ctx["contact"]!);
+        
+        if (mounted) {
+          setState(() { _isSaving = false; _isSubmitting = false; });
+          if (advanceResult["success"] == true) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Submitted to AVO Successfully!"), backgroundColor: Colors.green));
+            Navigator.pop(context);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to advance: ${advanceResult['message']}"), backgroundColor: Colors.red));
+          }
+        }
+      } else {
+        await _loadFullDetails();
+        
+        if (mounted) {
+          setState(() { _isSaving = false; _isSubmitting = false; _isEditing = false; });
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Saved Successfully!"), backgroundColor: Colors.green));
+        }
+      }
+
+    } catch (e, stackTrace) {
+      print("Submit Error: $e\n$stackTrace");
+      if (mounted) {
+        setState(() { _isSaving = false; _isSubmitting = false; });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("App Error: $e"), backgroundColor: Colors.red));
+      }
     }
   }
 
   Future<void> _handleReject() async {
     setState(() => _isRejecting = true);
-    var ctx = _getSafeContext();
-    int stepOrder = widget.summaryData['workflowStepOrder'] ?? widget.summaryData['stepOrder'] ?? 2;
-
-    var rejectResult = await api.rejectToPreviousStage(ctx["id"]!, stepOrder, ctx["vNo"]!, ctx["contact"]!);
     
-    if (!mounted) return;
-    setState(() => _isRejecting = false);
+    try {
+      var ctx = _getSafeContext();
+      
+      int stepOrder = 2;
+      if (widget.summaryData['workflowStepOrder'] != null) {
+        stepOrder = int.tryParse(widget.summaryData['workflowStepOrder'].toString()) ?? 2;
+      } else if (widget.summaryData['stepOrder'] != null) {
+        stepOrder = int.tryParse(widget.summaryData['stepOrder'].toString()) ?? 2;
+      }
 
-    if (rejectResult["success"] == true) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Rejected back to Stakeholder!"), backgroundColor: Colors.orange));
-      Navigator.pop(context);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Reject failed: ${rejectResult['message']}"), backgroundColor: Colors.red));
+      var rejectResult = await api.rejectToPreviousStage(ctx["id"]!, stepOrder, ctx["vNo"]!, ctx["contact"]!);
+      
+      if (!mounted) return;
+      setState(() => _isRejecting = false);
+
+      if (rejectResult["success"] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Rejected back to Stakeholder!"), backgroundColor: Colors.orange));
+        Navigator.pop(context);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Reject failed: ${rejectResult['message']}"), backgroundColor: Colors.red));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isRejecting = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("App Error: $e"), backgroundColor: Colors.red));
+      }
     }
   }
 
