@@ -484,6 +484,15 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
     // -------------------------------------------------------------
     // WRAPPED IN TRY-CATCH TO PREVENT INFINITE SPINNERS
     // -------------------------------------------------------------
+    
+    // FIX: Define stepOrder early so it's accessible throughout the function
+    int stepOrder = 2; // Default to Backend step order
+    if (widget.summaryData['workflowStepOrder'] != null) {
+      stepOrder = int.tryParse(widget.summaryData['workflowStepOrder'].toString()) ?? 2;
+    } else if (widget.summaryData['stepOrder'] != null) {
+      stepOrder = int.tryParse(widget.summaryData['stepOrder'].toString()) ?? 2;
+    }
+
     try {
       var ctx = _getSafeContext();
 
@@ -569,14 +578,7 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
       if (isSubmit) {
         await api.assignBackendTask(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, _selectedAssignee!); 
         
-        // NEW FIX: Safely parse workflow step order to prevent crashing
-        int stepOrder = 2;
-        if (widget.summaryData['workflowStepOrder'] != null) {
-          stepOrder = int.tryParse(widget.summaryData['workflowStepOrder'].toString()) ?? 2;
-        } else if (widget.summaryData['stepOrder'] != null) {
-          stepOrder = int.tryParse(widget.summaryData['stepOrder'].toString()) ?? 2;
-        }
-        
+        // FIX: The stepOrder is pulled from outer scope and the invalid assignee param is removed
         var advanceResult = await api.advanceToNextStage(ctx["id"]!, stepOrder, ctx["vNo"]!, ctx["contact"]!);
         
         if (mounted) {
