@@ -3,8 +3,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:file_picker/file_picker.dart';
 import 'services/api_service.dart';
-import 'main.dart'; 
+import 'main.dart';
 import 'avo_dashboard.dart';
+import 'qc_dashboard.dart';
+import 'finalreport_dashboard.dart';
 
 class BackendDashboard extends StatefulWidget {
   final String userName;
@@ -657,6 +659,78 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
       ));
   }
 
+  Widget _buildHeaderCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.grey.shade300)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          const Text("Workflow Status", style: TextStyle(fontWeight: FontWeight.bold)),
+          const Text("Backend View", style: TextStyle(color: Colors.grey)),
+        ]),
+        const SizedBox(height: 10),
+        RichText(
+          text: TextSpan(
+            style: const TextStyle(color: Colors.black, fontSize: 13, height: 1.6),
+            children: [
+              const TextSpan(text: "Vehicle Number: ", style: TextStyle(fontWeight: FontWeight.bold)),
+              TextSpan(text: "${widget.summaryData['vehicleNumber'] ?? _regNoController.text} | "),
+              const TextSpan(text: "Status: ", style: TextStyle(fontWeight: FontWeight.bold)),
+              TextSpan(text: "${widget.summaryData['status'] ?? widget.summaryData['workflow'] ?? 'Backend'}"),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(children: [
+            _buildWorkflowChip("Stake Holder", false, onTap: () {
+              Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => InspectionFormPage(summaryData: widget.summaryData, initialTab: "Stakeholder")));
+            }),
+            const SizedBox(width: 8),
+            _buildWorkflowChip("Backend", true),
+            const SizedBox(width: 8),
+            _buildWorkflowChip("AVO", false, onTap: () {
+              Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => InspectionFormPage(summaryData: widget.summaryData, initialTab: "AVO")));
+            }),
+            const SizedBox(width: 8),
+            _buildWorkflowChip("QC", false, onTap: () {
+              Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => QcDetailPage(summaryData: widget.summaryData)));
+            }),
+            const SizedBox(width: 8),
+            _buildWorkflowChip("Final Report", false, onTap: () {
+              Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => FinalReportDetailPage(summaryData: widget.summaryData)));
+            }),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildWorkflowChip(String label, bool active, {VoidCallback? onTap}) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+            color: active ? Colors.green : Colors.grey[200],
+            borderRadius: BorderRadius.circular(4)),
+        child: Text(label,
+            style: TextStyle(
+                color: active ? Colors.white : Colors.black,
+                fontWeight: FontWeight.bold,
+                fontSize: 12)),
+      ),
+    );
+  }
+
   Widget _buildSection({required String title, required List<Widget> children}) {
     return Container(
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade300)),
@@ -783,7 +857,7 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade300)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text("Workflow Status: Backend", style: TextStyle(fontWeight: FontWeight.bold)), const Divider(), Text("Vehicle: ${_regNoController.text}", style: const TextStyle(fontWeight: FontWeight.bold))])),
+            _buildHeaderCard(),
             const SizedBox(height: 15),
             if (!_isEditing) Row(children: [Expanded(child: ElevatedButton(onPressed: () => setState(() => _isEditing = true), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF3F51B5), foregroundColor: Colors.white), child: const Text("Edit"))), const SizedBox(width: 10), Expanded(child: ElevatedButton(onPressed: () => Navigator.pop(context), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF4081), foregroundColor: Colors.white), child: const Text("Back")))]),
             const SizedBox(height: 20),

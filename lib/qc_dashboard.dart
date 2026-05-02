@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 import 'services/api_service.dart';
 import 'vehicle_media_page.dart';
 import 'main.dart';
+import 'avo_dashboard.dart';
+import 'finalreport_dashboard.dart';
 
 // =============================================================================
 // QC DASHBOARD — list of cases currently in QualityControl step
@@ -193,10 +195,21 @@ class _QcDetailPageState extends State<QcDetailPage> {
   String? _returnedBy;
   String? _returnMessage;
 
-  // QC form controllers
-  final _overallRatingController = TextEditingController();
+  // QC form — button-picker state (matches web portal selectors)
+  static const _chassisPunchOptions = ['Original', 'Re-Punched', 'Tampered'];
+  static const _overallConditionOptions = ['Good', 'Average', 'Poor'];
+  static const _finalRecommendationOptions = [
+    'Recommended',
+    'Recommended with Conditions',
+    'Not Recommended',
+  ];
+
+  String? _selectedChassisPunch;
+  String? _selectedOverallCondition;
+  String? _selectedFinalRecommendation;
+
+  // QC form controllers (text fields that remain)
   final _valuationAmountController = TextEditingController();
-  final _chassisPunchController = TextEditingController();
   final _qcRemarksController = TextEditingController();
 
   // Payment controllers
@@ -258,9 +271,20 @@ class _QcDetailPageState extends State<QcDetailPage> {
   }
 
   void _populateQcFields(Map<String, dynamic> data) {
-    _overallRatingController.text = _readStr(data, ['overallRating']);
+    // overallCondition takes precedence; fall back to overallRating (web portal parity)
+    final cond = _readStr(data, ['overallCondition', 'overallRating']);
+    _selectedOverallCondition =
+        _overallConditionOptions.contains(cond) ? cond : null;
+
+    final chassis = _readStr(data, ['chassisPunch']);
+    _selectedChassisPunch =
+        _chassisPunchOptions.contains(chassis) ? chassis : null;
+
+    final rec = _readStr(data, ['finalRecommendation']);
+    _selectedFinalRecommendation =
+        _finalRecommendationOptions.contains(rec) ? rec : null;
+
     _valuationAmountController.text = _readStr(data, ['valuationAmount']);
-    _chassisPunchController.text = _readStr(data, ['chassisPunch']);
     _qcRemarksController.text = _readStr(data, ['remarks']);
   }
 
@@ -393,9 +417,12 @@ class _QcDetailPageState extends State<QcDetailPage> {
     final num paymentAmount = num.tryParse(_paymentAmountController.text) ?? 0;
 
     return {
-      "overallRating": _overallRatingController.text,
+      // Web portal saves both overallRating + overallCondition with same value
+      "overallRating": _selectedOverallCondition ?? '',
+      "overallCondition": _selectedOverallCondition ?? '',
+      "finalRecommendation": _selectedFinalRecommendation ?? '',
       "valuationAmount": amount ?? 0,
-      "chassisPunch": _chassisPunchController.text,
+      "chassisPunch": _selectedChassisPunch ?? '',
       "remarks": _qcRemarksController.text.isEmpty ? null : _qcRemarksController.text,
       "assignedTo": assigneeName,
       "assignedToPhoneNumber": assigneePhone,
@@ -413,6 +440,18 @@ class _QcDetailPageState extends State<QcDetailPage> {
   Future<void> _onSave() async {
     if (!(_qcFormKey.currentState?.validate() ?? false)) {
       _showError("Please fill all required fields (*)");
+      return;
+    }
+    if (_selectedChassisPunch == null) {
+      _showError("Please select Chassis Punch status");
+      return;
+    }
+    if (_selectedOverallCondition == null) {
+      _showError("Please select Overall Vehicle Condition");
+      return;
+    }
+    if (_selectedFinalRecommendation == null) {
+      _showError("Please select Final QC Recommendation");
       return;
     }
 
@@ -500,6 +539,18 @@ class _QcDetailPageState extends State<QcDetailPage> {
   Future<void> _onSubmit() async {
     if (!(_qcFormKey.currentState?.validate() ?? false)) {
       _showError("Please fill all required fields (*)");
+      return;
+    }
+    if (_selectedChassisPunch == null) {
+      _showError("Please select Chassis Punch status");
+      return;
+    }
+    if (_selectedOverallCondition == null) {
+      _showError("Please select Overall Vehicle Condition");
+      return;
+    }
+    if (_selectedFinalRecommendation == null) {
+      _showError("Please select Final QC Recommendation");
       return;
     }
 
@@ -857,7 +908,51 @@ class _QcDetailPageState extends State<QcDetailPage> {
           ),
           const SizedBox(height: 6),
           Text("ID: $id", style: const TextStyle(fontSize: 11, color: Colors.grey)),
+          const SizedBox(height: 12),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              _buildWorkflowChip("Stake Holder", false, onTap: () {
+                Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => InspectionFormPage(summaryData: widget.summaryData, initialTab: "Stakeholder")));
+              }),
+              const SizedBox(width: 8),
+              _buildWorkflowChip("Backend", false, onTap: () {
+                Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => InspectionFormPage(summaryData: widget.summaryData, initialTab: "Backend")));
+              }),
+              const SizedBox(width: 8),
+              _buildWorkflowChip("AVO", false, onTap: () {
+                Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => InspectionFormPage(summaryData: widget.summaryData, initialTab: "AVO")));
+              }),
+              const SizedBox(width: 8),
+              _buildWorkflowChip("QC", true),
+              const SizedBox(width: 8),
+              _buildWorkflowChip("Final Report", false, onTap: () {
+                Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => FinalReportDetailPage(summaryData: widget.summaryData)));
+              }),
+            ]),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildWorkflowChip(String label, bool active, {VoidCallback? onTap}) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+            color: active ? Colors.green : Colors.grey[200],
+            borderRadius: BorderRadius.circular(4)),
+        child: Text(label,
+            style: TextStyle(
+                color: active ? Colors.white : Colors.black,
+                fontWeight: FontWeight.bold,
+                fontSize: 12)),
       ),
     );
   }
@@ -1029,12 +1124,7 @@ class _QcDetailPageState extends State<QcDetailPage> {
     return Form(
       key: _qcFormKey,
       child: _buildSectionContainer("Quality Control", [
-        _buildEditField(
-          "Overall Rating",
-          _overallRatingController,
-          isEditable: canEdit,
-          isRequired: true,
-        ),
+        // ── Valuation Amount ──
         _buildEditField(
           "Valuation Amount (₹)",
           _valuationAmountController,
@@ -1042,29 +1132,148 @@ class _QcDetailPageState extends State<QcDetailPage> {
           isRequired: true,
           keyboardType: TextInputType.number,
         ),
-        _buildEditField(
-          "Chassis Punch",
-          _chassisPunchController,
+
+        // ── Chassis Punch — button picker ──
+        _buildButtonPicker(
+          label: "Chassis Punch",
+          options: _chassisPunchOptions,
+          selected: _selectedChassisPunch,
           isEditable: canEdit,
           isRequired: true,
+          onChanged: (v) => setState(() => _selectedChassisPunch = v),
+          optionColors: const {
+            'Original': Colors.green,
+            'Re-Punched': Colors.orange,
+            'Tampered': Colors.red,
+          },
         ),
+
+        // ── Overall Vehicle Condition — button picker ──
+        _buildButtonPicker(
+          label: "Overall Vehicle Condition",
+          options: _overallConditionOptions,
+          selected: _selectedOverallCondition,
+          isEditable: canEdit,
+          isRequired: true,
+          onChanged: (v) => setState(() => _selectedOverallCondition = v),
+          optionColors: const {
+            'Good': Colors.green,
+            'Average': Colors.orange,
+            'Poor': Colors.red,
+          },
+        ),
+
+        // ── Final QC Recommendation — button picker ──
+        _buildButtonPicker(
+          label: "Final QC Recommendation",
+          options: _finalRecommendationOptions,
+          selected: _selectedFinalRecommendation,
+          isEditable: canEdit,
+          isRequired: true,
+          onChanged: (v) => setState(() => _selectedFinalRecommendation = v),
+          optionColors: const {
+            'Recommended': Colors.green,
+            'Recommended with Conditions': Colors.orange,
+            'Not Recommended': Colors.red,
+          },
+        ),
+
+        // ── Remarks ──
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text("Remarks", style: TextStyle(color: Colors.grey[600], fontSize: 14)),
+              Text("QC Summary Remarks",
+                  style: TextStyle(color: Colors.grey[600], fontSize: 14)),
               const SizedBox(height: 6),
               TextField(
                 controller: _qcRemarksController,
                 readOnly: !canEdit,
                 maxLines: 3,
-                decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.all(12)),
+                decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.all(12)),
               ),
             ],
           ),
         ),
       ], isOpen: true),
+    );
+  }
+
+  /// Visual button-group picker (mirrors web portal rec-card style).
+  Widget _buildButtonPicker({
+    required String label,
+    required List<String> options,
+    required String? selected,
+    required bool isEditable,
+    bool isRequired = false,
+    required Function(String) onChanged,
+    Map<String, Color> optionColors = const {},
+  }) {
+    if (!isEditable) {
+      // Read-only view — show value as plain text
+      return _buildReadOnly(label, selected ?? '-');
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          RichText(
+            text: TextSpan(
+              text: label,
+              style: TextStyle(color: Colors.grey[700], fontSize: 14),
+              children: [
+                if (isRequired)
+                  const TextSpan(
+                      text: " *", style: TextStyle(color: Colors.red))
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: options.map((opt) {
+              final isSelected = selected == opt;
+              final color = optionColors[opt] ?? Colors.blueGrey;
+              return GestureDetector(
+                onTap: () => onChanged(opt),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: isSelected ? color : Colors.grey[100],
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: isSelected ? color : Colors.grey.shade300,
+                      width: isSelected ? 2 : 1,
+                    ),
+                  ),
+                  child: Text(
+                    opt,
+                    style: TextStyle(
+                      color: isSelected ? Colors.white : Colors.grey[700],
+                      fontWeight:
+                          isSelected ? FontWeight.bold : FontWeight.normal,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+          if (isRequired && selected == null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text("Please select an option",
+                  style: TextStyle(color: Colors.red[700], fontSize: 12)),
+            ),
+        ],
+      ),
     );
   }
 

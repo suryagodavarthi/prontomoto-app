@@ -86,6 +86,26 @@ class ApiService {
         return {"success": true};
       }
 
+      // Backend returns 400 when trying to complete a step that is already 'Completed'
+      // (cross-device re-submission or retry). Treat as idempotent success.
+      if (action == 'complete' && response.statusCode == 400) {
+        final body = response.body;
+        if (body.contains("'Completed'") || body.toLowerCase().contains("completed")) {
+          print("DEBUG: completeWorkflow step $stepOrder — already Completed, treating as success");
+          return {"success": true};
+        }
+      }
+
+      // Backend returns 400 when trying to start a step that is already 'InProgress'
+      // (concurrent calls or retry). Safe to ignore.
+      if (action == 'start' && response.statusCode == 400) {
+        final body = response.body;
+        if (body.contains("'InProgress'") || body.toLowerCase().contains("inprogress")) {
+          print("DEBUG: startWorkflow step $stepOrder — already InProgress, treating as success");
+          return {"success": true};
+        }
+      }
+
       print("DEBUG: Workflow action $action failed with ${response.statusCode}: ${response.body}");
       return {"success": false, "message": response.body};
     } catch (e) {
@@ -414,7 +434,7 @@ class ApiService {
     if (contact.trim().isEmpty) contact = "0000000000";
 
     try {
-      final uri = Uri.parse('$baseUrl/valuations/$id/inspection/photos/check').replace(
+      final uri = Uri.parse('$baseUrl/valuations/$id/photos/validate').replace(
         queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()},
       );
       final response = await http.get(uri).timeout(_defaultTimeout);
@@ -989,6 +1009,79 @@ class ApiService {
       return [];
     } catch (e) {
       return [];
+    }
+  }
+
+  // ===========================================================================
+  // 7. PINCODE LOOKUP
+  // Matches Angular PincodeService → GET /api/Pincodes/{pincode}
+  // Returns list of office objects: { name, block, district, division, state, country }
+  // ===========================================================================
+  Future<List<dynamic>> lookupPincode(String pincode) async {
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/Pincodes/$pincode'))
+          .timeout(_defaultTimeout);
+      if (response.statusCode == 200) return jsonDecode(response.body);
+      return [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // ===========================================================================
+  // 8. COMPLETE VALUATION (Final Report step)
+  // POST /api/valuations/{id}/valuationresponse/complete
+  // Matches Angular ValuationResponseService.completeValuationResponse()
+  // ===========================================================================
+  Future<Map<String, dynamic>> completeValuationResponse({
+    required String valuationId,
+    required String vehicleNumber,
+    required String applicantContact,
+    required String completedBy,
+    String? completedByPhone,
+    String? completedByEmail,
+    String? paymentStatus,
+    String? paymentReference,
+    String? paymentDate,
+    String? paymentMethod,
+    String? paymentAmount,
+    String? remarks,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$valuationId/valuationresponse/complete')
+          .replace(queryParameters: {
+        "vehicleNumber": vehicleNumber,
+        "applicantContact": applicantContact,
+      });
+
+      final Map<String, dynamic> body = {
+        "Status": "Completed",
+        "CompletedAt": DateTime.now().toUtc().toIso8601String(),
+        "CompletedBy": completedBy,
+        "CompletedByPhoneNumber": completedByPhone ?? "",
+        "CompletedByEmail": completedByEmail ?? "",
+        "CompletedByWhatsapp": completedByPhone ?? "",
+        "PaymentStatus": paymentStatus ?? "Pending",
+        "PaymentReference": paymentReference ?? "",
+        "PaymentDate": paymentDate ?? DateTime.now().toUtc().toIso8601String(),
+        "PaymentMethod": paymentMethod ?? "Online",
+        "PaymentAmount": paymentAmount ?? "0",
+        "Remarks": remarks ?? "",
+      };
+
+      final response = await http.post(
+        uri,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode(body),
+      ).timeout(_defaultTimeout);
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return {"success": true};
+      }
+      return {"success": false, "message": response.body};
+    } catch (e) {
+      return {"success": false, "message": e.toString()};
     }
   }
 }

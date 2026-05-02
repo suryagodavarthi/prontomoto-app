@@ -5,13 +5,13 @@ import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/api_service.dart';
 import 'package:file_picker/file_picker.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
-import 'backend_dashboard.dart'; 
-import 'avo_dashboard.dart'; 
-import 'firebase_options.dart'; 
+import 'backend_dashboard.dart';
+import 'avo_dashboard.dart';
+import 'qc_dashboard.dart';
+import 'finalreport_dashboard.dart';
+import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -134,30 +134,48 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   void _verifyWithAzure(String phone) async {
+    // Use the full +91 number from Firebase when available (matches stored phoneNumber field)
+    final firebasePhone = FirebaseAuth.instance.currentUser?.phoneNumber;
+    final lookupPhone = (firebasePhone != null && firebasePhone.isNotEmpty)
+        ? firebasePhone
+        : (phone.startsWith('+') ? phone : '+91$phone');
+
     ApiService api = ApiService();
-    var result = await api.loginUser(phone);
+    var result = await api.loginUser(lookupPhone);
     setState(() => _isLoading = false);
 
     if (result["success"] == true) {
-      String role = result["role"].toString();
-      String name = result["name"].toString();
-      
-      if (role == "User") {
-        if (name.toLowerCase().contains("avo") || name.toLowerCase().contains("shekhar")) role = "AVO";
-        else if (name.toLowerCase().contains("backend")) role = "Backend";
-      }
+      // roleId comes directly from the backend user document — no name-guessing
+      final String roleId = result["role"].toString().toLowerCase();
+      final String name = result["name"].toString();
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('saved_phone', phone);
+      await prefs.setString('saved_phone', lookupPhone);
       await prefs.setString('saved_name', name);
-      await prefs.setString('saved_role', role);
+      await prefs.setString('saved_role', roleId);
 
-      if (role.toLowerCase().contains("backend") || role.toLowerCase().contains("admin")) {
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => BackendDashboard(userName: name)));
-      } else if (role.toLowerCase().contains("avo") || role.toLowerCase().contains("valuer")) {
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => AvoDashboard(userName: name)));
+      if (!mounted) return;
+
+      if (roleId == 'avo' || roleId == 'valuer') {
+        Navigator.pushReplacement(context,
+            MaterialPageRoute(builder: (context) => AvoDashboard(userName: name)));
+      } else if (roleId == 'qc') {
+        Navigator.pushReplacement(context,
+            MaterialPageRoute(builder: (context) => QcDashboard(userName: name)));
+      } else if (roleId == 'finalreport') {
+        Navigator.pushReplacement(context,
+            MaterialPageRoute(
+                builder: (context) => FinalReportDashboard(userName: name)));
+      } else if (roleId == 'backend' ||
+          roleId == 'admin' ||
+          roleId == 'superadmin' ||
+          roleId == 'stateadmin') {
+        Navigator.pushReplacement(context,
+            MaterialPageRoute(builder: (context) => BackendDashboard(userName: name)));
       } else {
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => StakeholderDashboard(userName: name)));
+        // Stakeholder and any other role
+        Navigator.pushReplacement(context,
+            MaterialPageRoute(builder: (context) => StakeholderDashboard(userName: name)));
       }
     } else {
       _showSnack(result["message"] ?? "Login Failed", Colors.red);
@@ -415,6 +433,10 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
                         Navigator.push(context, MaterialPageRoute(builder: (context) => BackendCaseDetailsPage(summaryData: item))).then((_) => _loadDashboardData());
                       } else if (wf.contains("avo") || wf.contains("inspection")) {
                         Navigator.push(context, MaterialPageRoute(builder: (context) => InspectionFormPage(summaryData: item))).then((_) => _loadDashboardData());
+                      } else if (wf.contains("qc") || wf.contains("qualitycontrol") || wf.contains("quality")) {
+                        Navigator.push(context, MaterialPageRoute(builder: (context) => QcDetailPage(summaryData: item))).then((_) => _loadDashboardData());
+                      } else if (wf.contains("final") || wf.contains("finalreport")) {
+                        Navigator.push(context, MaterialPageRoute(builder: (context) => FinalReportDetailPage(summaryData: item))).then((_) => _loadDashboardData());
                       } else {
                         Navigator.push(context, MaterialPageRoute(builder: (context) => VehicleDetailsPage(summaryData: item))).then((_) => _loadDashboardData());
                       }
@@ -501,28 +523,24 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
 
   Future<void> _fetchPincodeDetails(String pincode) async {
     setState(() => _isLoadingPincode = true);
-    final url = Uri.parse("https://api.postalpincode.in/pincode/$pincode");
     try {
-      final response = await http.get(url);
-      if (response.statusCode == 200) {
-        final List<dynamic> data = jsonDecode(response.body);
-        if (data.isNotEmpty && data[0]['Status'] == 'Success') {
-          final List<dynamic> postOffices = data[0]['PostOffice'];
-          if (postOffices.isNotEmpty) {
-            final firstOffice = postOffices[0];
+      // Uses backend GET /api/Pincodes/{pin} — matches Angular PincodeService
+      final data = await ApiService().lookupPincode(pincode);
+      if (data.isNotEmpty) {
+            final firstOffice = data[0];
             setState(() {
-              _cityController.text = firstOffice['Block'] ?? "";
-              _districtController.text = firstOffice['District'] ?? "";
-              _divisionController.text = firstOffice['Division'] ?? "";
-              _stateController.text = firstOffice['State'] ?? "";
-              _countryController.text = firstOffice['Country'] ?? "India";
-              _locationList = postOffices.map<String>((office) => office['Name'].toString()).toSet().toList();
+              _cityController.text = firstOffice['block'] ?? "";
+              _districtController.text = firstOffice['district'] ?? "";
+              _divisionController.text = firstOffice['division'] ?? "";
+              _stateController.text = firstOffice['state'] ?? "";
+              _countryController.text = firstOffice['country'] ?? "India";
+              _locationList = data.map<String>((office) => office['name'].toString()).toSet().toList();
               _selectedLocation = null;
             });
-          }
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid Pincode"), backgroundColor: Colors.orange));
-        }
+
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Invalid Pincode"), backgroundColor: Colors.orange));
       }
     } catch (e) {
       print("Error fetching pincode: $e");
@@ -982,19 +1000,16 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
 
   Future<void> _fetchLocationsForPincode(String val) async {
     try {
-      final url = Uri.parse("https://prontobackend-bhdnbec2fvd3ecfk.eastus2-01.azurewebsites.net/api/Pincodes/$val");
-      final response = await http.get(url);
-      if (response.statusCode == 200) {
-        List<dynamic> data = jsonDecode(response.body);
-        if (data.isNotEmpty && mounted) {
-          setState(() {
-            _pincodeLocations = data;
-            _locationNames = data.map((e) => e['name'].toString()).toSet().toList();
-            if (_selectedLocationName != null && !_locationNames.contains(_selectedLocationName)) {
-              _selectedLocationName = null;
-            }
-          });
-        }
+      // Uses backend GET /api/Pincodes/{pin} via ApiService — matches Angular PincodeService
+      final data = await api.lookupPincode(val);
+      if (data.isNotEmpty && mounted) {
+        setState(() {
+          _pincodeLocations = data;
+          _locationNames = data.map((e) => e['name'].toString()).toSet().toList();
+          if (_selectedLocationName != null && !_locationNames.contains(_selectedLocationName)) {
+            _selectedLocationName = null;
+          }
+        });
       }
     } catch (e) { print(e); }
   }

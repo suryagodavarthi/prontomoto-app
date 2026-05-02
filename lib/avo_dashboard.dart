@@ -10,6 +10,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'main.dart';
 import 'backend_dashboard.dart';
+import 'qc_dashboard.dart';
+import 'finalreport_dashboard.dart';
 
 // =============================================================================
 // VALUATION-TYPE FIELD VISIBILITY MAP (ported from inspection-update.component.ts)
@@ -355,7 +357,8 @@ class _AvoDashboardState extends State<AvoDashboard> {
 
 class InspectionFormPage extends StatefulWidget {
   final Map<String, dynamic> summaryData;
-  const InspectionFormPage({super.key, required this.summaryData});
+  final String initialTab;
+  const InspectionFormPage({super.key, required this.summaryData, this.initialTab = "AVO"});
 
   @override
   State<InspectionFormPage> createState() => _InspectionFormPageState();
@@ -579,6 +582,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   @override
   void initState() {
     super.initState();
+    _currentTab = widget.initialTab;
     _stkContactController.addListener(() {
       if (_sameAsContact) _stkWhatsappController.text = _stkContactController.text;
     });
@@ -1397,7 +1401,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
             onPressed: () {
               Navigator.pop(ctx);
               Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => VehicleMediaPage(valuationId: widget.summaryData['valuationId'] ?? "")));
+                  MaterialPageRoute(builder: (_) => VehicleMediaPage(valuationId: widget.summaryData['valuationId'] ?? "", cameraOnly: true)));
             },
             child: const Text("Upload photos"),
           ),
@@ -2298,19 +2302,32 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
                 TextSpan(text: "${widget.summaryData['status']}")
               ])),
           const SizedBox(height: 12),
-          Row(children: [
-            _buildHeaderTabChip("Stake Holder", _currentTab == "Stakeholder"),
-            const SizedBox(width: 8),
-            _buildHeaderTabChip("Backend", _currentTab == "Backend"),
-            const SizedBox(width: 8),
-            _buildHeaderTabChip("AVO", _currentTab == "AVO")
-          ])
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              _buildHeaderTabChip("Stake Holder", _currentTab == "Stakeholder"),
+              const SizedBox(width: 8),
+              _buildHeaderTabChip("Backend", _currentTab == "Backend"),
+              const SizedBox(width: 8),
+              _buildHeaderTabChip("AVO", _currentTab == "AVO"),
+              const SizedBox(width: 8),
+              _buildHeaderTabChip("QC", false, onTap: () {
+                Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => QcDetailPage(summaryData: widget.summaryData)));
+              }),
+              const SizedBox(width: 8),
+              _buildHeaderTabChip("Final Report", false, onTap: () {
+                Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => FinalReportDetailPage(summaryData: widget.summaryData)));
+              }),
+            ]),
+          )
         ]));
   }
 
-  Widget _buildHeaderTabChip(String label, bool active) {
+  Widget _buildHeaderTabChip(String label, bool active, {VoidCallback? onTap}) {
     return InkWell(
-        onTap: () {
+        onTap: onTap ?? () {
           setState(() {
             _currentTab = label == "Stake Holder" ? "Stakeholder" : label;
             if (label == "Backend") _isBackendEditing = false;
@@ -2331,7 +2348,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
         margin: const EdgeInsets.symmetric(vertical: 20),
         child: ElevatedButton(
             onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (context) => VehicleMediaPage(valuationId: widget.summaryData['valuationId'] ?? ""))),
+                MaterialPageRoute(builder: (context) => VehicleMediaPage(valuationId: widget.summaryData['valuationId'] ?? "", cameraOnly: true))),
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF3F51B5), foregroundColor: Colors.white),
             child: const Text("View / Upload Images")));
   }
