@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
@@ -25,7 +26,7 @@ class ApiService {
             orElse: () => null);
 
         if (user != null) {
-          String fetchedRole = user['role']?.toString() ?? "User";
+          String fetchedRole = user['roleId']?.toString() ?? "User";
           return {
             "success": true,
             "role": fetchedRole,
@@ -74,7 +75,7 @@ class ApiService {
         }
       );
 
-      print("DEBUG: Workflow action $action for step $stepOrder with vehicle: $vehicleNo");
+      debugPrint("DEBUG: Workflow action $action for step $stepOrder with vehicle: $vehicleNo");
 
       final response = await http.post(
         uri,
@@ -82,7 +83,7 @@ class ApiService {
       ).timeout(_defaultTimeout);
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        print("DEBUG: Workflow action $action succeeded");
+        debugPrint("DEBUG: Workflow action $action succeeded");
         return {"success": true};
       }
 
@@ -91,7 +92,7 @@ class ApiService {
       if (action == 'complete' && response.statusCode == 400) {
         final body = response.body;
         if (body.contains("'Completed'") || body.toLowerCase().contains("completed")) {
-          print("DEBUG: completeWorkflow step $stepOrder — already Completed, treating as success");
+          debugPrint("DEBUG: completeWorkflow step $stepOrder — already Completed, treating as success");
           return {"success": true};
         }
       }
@@ -101,15 +102,15 @@ class ApiService {
       if (action == 'start' && response.statusCode == 400) {
         final body = response.body;
         if (body.contains("'InProgress'") || body.toLowerCase().contains("inprogress")) {
-          print("DEBUG: startWorkflow step $stepOrder — already InProgress, treating as success");
+          debugPrint("DEBUG: startWorkflow step $stepOrder — already InProgress, treating as success");
           return {"success": true};
         }
       }
 
-      print("DEBUG: Workflow action $action failed with ${response.statusCode}: ${response.body}");
+      debugPrint("DEBUG: Workflow action $action failed with ${response.statusCode}: ${response.body}");
       return {"success": false, "message": response.body};
     } catch (e) {
-      print("DEBUG: Workflow action exception: $e");
+      debugPrint("DEBUG: Workflow action exception: $e");
       return {"success": false, "message": e.toString()};
     }
   }
@@ -123,47 +124,47 @@ class ApiService {
   Future<Map<String, dynamic>> advanceToNextStage(String id, int currentStepOrder, String vehicleNo, String contact) async {
     contact = contact.trim();
 
-    print("DEBUG: Starting workflow advance for step $currentStepOrder");
-    print("DEBUG: Vehicle: $vehicleNo, Contact: $contact");
+    debugPrint("DEBUG: Starting workflow advance for step $currentStepOrder");
+    debugPrint("DEBUG: Vehicle: $vehicleNo, Contact: $contact");
 
     if (currentStepOrder > 1) {
       int prevStep = currentStepOrder - 1;
-      print("DEBUG: Healing previous step $prevStep");
+      debugPrint("DEBUG: Healing previous step $prevStep");
 
       var prevStart = await _workflowAction(id, prevStep, vehicleNo, contact, 'start');
       if (prevStart['success'] != true) {
         return {"success": false, "message": "Failed to heal Prev Step ($prevStep) Start: ${prevStart['message']}"};
       }
-      print("DEBUG: Previous step $prevStep started successfully");
+      debugPrint("DEBUG: Previous step $prevStep started successfully");
 
       var prevComplete = await _workflowAction(id, prevStep, vehicleNo, contact, 'complete');
       if (prevComplete['success'] != true) {
         return {"success": false, "message": "Failed to heal Prev Step ($prevStep) Complete: ${prevComplete['message']}"};
       }
-      print("DEBUG: Previous step $prevStep completed successfully");
+      debugPrint("DEBUG: Previous step $prevStep completed successfully");
     }
 
-    print("DEBUG: Starting current step $currentStepOrder");
+    debugPrint("DEBUG: Starting current step $currentStepOrder");
     var currentStart = await _workflowAction(id, currentStepOrder, vehicleNo, contact, 'start');
     if (currentStart['success'] != true) {
       return {"success": false, "message": "Failed to Start Current Step ($currentStepOrder): ${currentStart['message']}"};
     }
-    print("DEBUG: Current step $currentStepOrder started successfully");
+    debugPrint("DEBUG: Current step $currentStepOrder started successfully");
 
-    print("DEBUG: Completing current step $currentStepOrder");
+    debugPrint("DEBUG: Completing current step $currentStepOrder");
     var currentComplete = await _workflowAction(id, currentStepOrder, vehicleNo, contact, 'complete');
     if (currentComplete['success'] != true) {
       return {"success": false, "message": "Failed to Complete Current Step ($currentStepOrder): ${currentComplete['message']}"};
     }
-    print("DEBUG: Current step $currentStepOrder completed successfully");
+    debugPrint("DEBUG: Current step $currentStepOrder completed successfully");
 
     int nextStepOrder = currentStepOrder + 1;
-    print("DEBUG: Starting next step $nextStepOrder");
+    debugPrint("DEBUG: Starting next step $nextStepOrder");
     var nextStart = await _workflowAction(id, nextStepOrder, vehicleNo, contact, 'start');
     if (nextStart['success'] != true) {
       return {"success": false, "message": "Failed to Start Next Step ($nextStepOrder): ${nextStart['message']}"};
     }
-    print("DEBUG: Next step $nextStepOrder started successfully");
+    debugPrint("DEBUG: Next step $nextStepOrder started successfully");
 
     String nextStepName = "Backend";
     if (nextStepOrder == 3) nextStepName = "AVO";
@@ -181,16 +182,18 @@ class ApiService {
       },
     );
     if (tableUpdate['success'] != true) {
-      print("DEBUG: Table update failed (non-fatal): ${tableUpdate['message']}");
+      debugPrint("DEBUG: Table update failed (non-fatal): ${tableUpdate['message']}");
     }
 
-    print("DEBUG: Workflow advance completed successfully");
+    debugPrint("DEBUG: Workflow advance completed successfully");
     return {"success": true};
   }
 
   // LEGACY simple reject — still used by BackendCaseDetailsPage.
   // AVO dashboard now uses returnWorkflow with reason + override fallback.
-  Future<Map<String, dynamic>> rejectToPreviousStage(String id, int currentStepOrder, String vehicleNo, String contact) async {
+  Future<Map<String, dynamic>> rejectToPreviousStage(
+      String id, int currentStepOrder, String vehicleNo, String contact,
+      {String reason = "Rejected from Mobile App"}) async {
     if (vehicleNo.trim().isEmpty) vehicleNo = "UNKNOWN";
     if (contact.trim().isEmpty) contact = "0000000000";
 
@@ -211,7 +214,7 @@ class ApiService {
           "ApplicantContact": contact,
           "CurrentStep": currentStepName,
           "TargetReturnStep": targetStep,
-          "ReturnReason": "Rejected from Mobile App",
+          "ReturnReason": reason.isNotEmpty ? reason : "Rejected from Mobile App",
         })
       ).timeout(_defaultTimeout);
       if (response.statusCode >= 200 && response.statusCode < 300) return {"success": true};
@@ -481,15 +484,15 @@ class ApiService {
   // 2e. AI VALUATION ASSIST (called inline during Submit, like web portal)
   // ===========================================================================
 
-  /// VERIFY ENDPOINT: I don't have quality-control.service.ts. Best guess based
-  /// on URL patterns. If this 404s, replace the path with the real one.
+  /// Triggers the AI valuation assist via GET /api/valuations/{id}/valuation.
+  /// The backend calls OpenAI/GPT internally and stores the result in the document.
   /// Has a 30s timeout — if AI is slow, Submit hangs up to 30s rather than forever.
   Future<Map<String, dynamic>> getValuationDetailsfromAI(String id, String vNo, String contact) async {
     if (vNo.trim().isEmpty) vNo = "UNKNOWN";
     if (contact.trim().isEmpty) contact = "0000000000";
 
     try {
-      final uri = Uri.parse('$baseUrl/valuations/$id/qualitycontrol/ai').replace(
+      final uri = Uri.parse('$baseUrl/valuations/$id/valuation').replace(
         queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()},
       );
       final response = await http.get(uri).timeout(_aiTimeout);
@@ -685,7 +688,7 @@ class ApiService {
         data.addAll(normalize(jsonDecode(rcRes.body)));
       }
     } catch (e) {
-      print("RC fetch error: $e");
+      debugPrint("RC fetch error: $e");
     }
 
     try {
@@ -698,7 +701,7 @@ class ApiService {
         });
       }
     } catch (e) {
-      print("Saved details fetch error: $e");
+      debugPrint("Saved details fetch error: $e");
     }
 
     return data;

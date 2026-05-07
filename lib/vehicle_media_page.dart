@@ -1,11 +1,11 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'dart:convert';
 import 'services/api_service.dart';
+import 'custom_camera_page.dart';
 
 // Simple holder so we can store camera bytes and file-picker bytes the same way.
 class _MediaFile {
@@ -23,11 +23,18 @@ class VehicleMediaPage extends StatefulWidget {
   /// Pass cameraOnly: true from AVO; leave default (false) from QC / FinalReport.
   final bool cameraOnly;
 
+  /// Optional: pass vehicleNumber and applicantContact directly so we don't
+  /// need to look up the case via getOpenValuations() (which fails for completed cases).
+  final String? vehicleNumber;
+  final String? applicantContact;
+
   const VehicleMediaPage({
     super.key,
     required this.valuationId,
     this.existingImages = const {},
     this.cameraOnly = false,
+    this.vehicleNumber,
+    this.applicantContact,
   });
 
   @override
@@ -102,15 +109,23 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
     });
 
     try {
-      final openCases = await ApiService().getOpenValuations();
-      final currentCase = openCases.firstWhere(
-          (c) => (c['valuationId'] ?? c['id']) == widget.valuationId,
-          orElse: () => null);
-
-      if (currentCase != null) {
-        _vNo = currentCase['vehicleNumber'] ?? "";
-        _contact = currentCase['applicantContact'] ?? "";
+      // Use constructor params directly when provided (works for completed cases too)
+      if (widget.vehicleNumber != null && widget.vehicleNumber!.isNotEmpty) {
+        _vNo = widget.vehicleNumber!;
+        _contact = widget.applicantContact ?? "";
         await _fetchLatestPhotosFromServer();
+      } else {
+        // Fallback: look up via open valuations (only works for in-progress cases)
+        final openCases = await ApiService().getOpenValuations();
+        final currentCase = openCases.firstWhere(
+            (c) => (c['valuationId'] ?? c['id']) == widget.valuationId,
+            orElse: () => null);
+
+        if (currentCase != null) {
+          _vNo = currentCase['vehicleNumber'] ?? "";
+          _contact = currentCase['applicantContact'] ?? "";
+          await _fetchLatestPhotosFromServer();
+        }
       }
     } catch (e) {
       debugPrint("Init error: $e");
@@ -144,40 +159,262 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
     }
   }
 
+  // ── PHOTO GUIDE DATA ─────────────────────────────────────────────────────
+
+  static const Map<String, Map<String, dynamic>> _photoGuides = {
+    "Front Left Side": {
+      "icon": Icons.directions_car,
+      "hint": "Stand at the front-left corner of the vehicle. Capture both the bonnet and left fender in frame.",
+      "color": Colors.teal,
+    },
+    "Front Right Side": {
+      "icon": Icons.directions_car,
+      "hint": "Stand at the front-right corner. Capture the bonnet and right fender together.",
+      "color": Colors.teal,
+    },
+    "Rear Left Side": {
+      "icon": Icons.directions_car,
+      "hint": "Stand at the rear-left corner. Capture the boot lid and left rear quarter panel.",
+      "color": Colors.indigo,
+    },
+    "Rear Right Side": {
+      "icon": Icons.directions_car,
+      "hint": "Stand at the rear-right corner. Boot lid and right quarter panel should be visible.",
+      "color": Colors.indigo,
+    },
+    "Front View (grille)": {
+      "icon": Icons.crop_free,
+      "hint": "Stand directly in front. Centre the grille and headlights in frame.",
+      "color": Colors.blue,
+    },
+    "Rear View (tailgate)": {
+      "icon": Icons.crop_free,
+      "hint": "Stand directly behind the vehicle. Capture the full tailgate and number plate.",
+      "color": Colors.blue,
+    },
+    "Driver's Side Profile": {
+      "icon": Icons.straighten,
+      "hint": "Stand at full-side distance on the driver's side. Entire vehicle profile must fit in frame.",
+      "color": Colors.purple,
+    },
+    "Passenger Side Profile": {
+      "icon": Icons.straighten,
+      "hint": "Stand at full-side distance on the passenger side. Entire vehicle profile must fit in frame.",
+      "color": Colors.purple,
+    },
+    "Dashboard": {
+      "icon": Icons.dashboard,
+      "hint": "Sit in the driver's seat or lean in. Capture the full dashboard including steering wheel.",
+      "color": Colors.brown,
+    },
+    "Instrument Cluster": {
+      "icon": Icons.speed,
+      "hint": "Ignition ON. Capture the speedometer, fuel gauge, and warning lights clearly.",
+      "color": Colors.orange,
+    },
+    "Engine Bay": {
+      "icon": Icons.settings,
+      "hint": "Open the bonnet fully. Capture the complete engine bay from above.",
+      "color": Colors.grey,
+    },
+    "Chassis Number Plate": {
+      "icon": Icons.pin,
+      "hint": "Locate the chassis number plate (usually on the firewall or door jamb). Ensure all digits are readable.",
+      "color": Colors.red,
+    },
+    "Chassis Imprint": {
+      "icon": Icons.texture,
+      "hint": "Find the embossed chassis imprint on the body. Light the area and capture all digits clearly.",
+      "color": Colors.red,
+    },
+    "Gear and Seats": {
+      "icon": Icons.event_seat,
+      "hint": "Capture the gear lever area and front seats. Show overall interior condition.",
+      "color": Colors.blueGrey,
+    },
+    "Dashboard Close-up": {
+      "icon": Icons.center_focus_strong,
+      "hint": "Close-up of the centre console: infotainment, AC controls, and switches.",
+      "color": Colors.brown,
+    },
+    "Odometer": {
+      "icon": Icons.speed,
+      "hint": "Ignition ON. Capture only the odometer reading — digits must be sharp and fully visible.",
+      "color": Colors.orange,
+    },
+    "Selfie with Vehicle": {
+      "icon": Icons.person,
+      "hint": "Stand beside the vehicle. Both you and the vehicle (with number plate) must be visible.",
+      "color": Colors.pink,
+    },
+    "Underbody": {
+      "icon": Icons.arrow_downward,
+      "hint": "Position camera underneath the vehicle. Capture the chassis rails and floor pan condition.",
+      "color": Colors.deepOrange,
+    },
+    "Tires and Rims": {
+      "icon": Icons.trip_origin,
+      "hint": "Capture all four tires individually, or group shots showing tread depth and rim condition.",
+      "color": Colors.green,
+    },
+    "Vehicle Video": {
+      "icon": Icons.videocam,
+      "hint": "Walk around the full vehicle in one continuous clip (approx. 30–60 seconds).",
+      "color": Colors.deepPurple,
+    },
+  };
+
   // ── PICK / CAPTURE ────────────────────────────────────────────────────────
 
   Future<void> _pickMedia(String key, {bool isVideo = false}) async {
     if (widget.cameraOnly) {
-      // ── CAMERA ONLY MODE (AVO) ─────────────────────────────────────────
-      await _captureWithCamera(key, isVideo: isVideo);
+      // ── CAMERA ONLY MODE (AVO): show guide overlay first ──────────────
+      final proceed = await _showCaptureGuide(key, isVideo: isVideo);
+      if (proceed == true) {
+        await _captureWithCamera(key, isVideo: isVideo);
+      }
     } else {
       // ── FILE PICKER MODE (QC / FinalReport) ────────────────────────────
       await _pickFromFiles(key, isVideo: isVideo);
     }
   }
 
+  /// Shows a full-screen bottom sheet naming the photo slot, with a tip and
+  /// a prominent "Open Camera" button. Returns true when user confirms.
+  Future<bool?> _showCaptureGuide(String key, {bool isVideo = false}) async {
+    final guide = _photoGuides[key];
+    final Color accent = (guide?['color'] as Color?) ?? Colors.teal;
+    final IconData guideIcon = (guide?['icon'] as IconData?) ??
+        (isVideo ? Icons.videocam : Icons.camera_alt);
+    final String hint = (guide?['hint'] as String?) ?? '';
+
+    return showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 20),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+
+            // Icon badge
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: accent.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(guideIcon, color: accent, size: 36),
+            ),
+            const SizedBox(height: 16),
+
+            // Photo name
+            Text(
+              key,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: accent,
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Divider
+            Divider(color: accent.withOpacity(0.2)),
+            const SizedBox(height: 12),
+
+            // Hint
+            if (hint.isNotEmpty) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.lightbulb_outline, color: Colors.amber.shade700, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      hint,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey.shade700,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+            ],
+
+            // Action buttons
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.pop(context, true),
+                icon: Icon(isVideo ? Icons.videocam : Icons.camera_alt,
+                    size: 20),
+                label: Text(
+                  isVideo ? "Record Video" : "Open Camera",
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text("Cancel",
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 14)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _captureWithCamera(String key, {bool isVideo = false}) async {
-    final picker = ImagePicker();
     try {
-      if (isVideo) {
-        final XFile? video =
-            await picker.pickVideo(source: ImageSource.camera);
-        if (video == null) return;
-        final bytes = await video.readAsBytes();
-        setState(() => _localFiles[key] =
-            _MediaFile(name: video.name.isNotEmpty ? video.name : '$key.mp4', bytes: bytes));
-      } else {
-        final XFile? photo =
-            await picker.pickImage(source: ImageSource.camera, imageQuality: 85);
-        if (photo == null) return;
-        final bytes = await photo.readAsBytes();
-        setState(() => _localFiles[key] =
-            _MediaFile(name: photo.name.isNotEmpty ? photo.name : '$key.jpg', bytes: bytes));
-      }
+      final Uint8List? bytes = await Navigator.push<Uint8List>(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              CustomCameraPage(slotName: key, isVideo: isVideo),
+          fullscreenDialog: true,
+        ),
+      );
+      if (bytes == null || bytes.isEmpty) return;
+      final filename =
+          '${_backendKeys[key] ?? key}${isVideo ? '.mp4' : '.jpg'}';
+      setState(() =>
+          _localFiles[key] = _MediaFile(name: filename, bytes: bytes));
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text("Camera error: $e"), backgroundColor: Colors.red));
+            content: Text("Camera error: $e"),
+            backgroundColor: Colors.red));
       }
     }
   }

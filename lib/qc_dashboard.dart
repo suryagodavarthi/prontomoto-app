@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'services/api_service.dart';
-import 'vehicle_media_page.dart';
 import 'main.dart';
 import 'avo_dashboard.dart';
 import 'finalreport_dashboard.dart';
@@ -23,7 +22,9 @@ class QcDashboard extends StatefulWidget {
 class _QcDashboardState extends State<QcDashboard> {
   final ApiService _api = ApiService();
   bool _isLoading = true;
+  List<dynamic> _allCases = [];
   List<dynamic> _cases = [];
+  String _selectedSubTab = "All";
 
   @override
   void initState() {
@@ -43,17 +44,68 @@ class _QcDashboardState extends State<QcDashboard> {
       }).toList();
       if (mounted) {
         setState(() {
-          _cases = filtered;
+          _allCases = filtered;
           _isLoading = false;
         });
+        _applySubTab();
       }
-    } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to load cases: $e"), backgroundColor: Colors.red),
+        );
+      }
     }
+  }
+
+  void _applySubTab() {
+    List<dynamic> filtered;
+    if (_selectedSubTab == "Returned") {
+      filtered = _allCases.where((c) {
+        final s = (c['status'] ?? "").toString().toLowerCase();
+        return s.contains("return");
+      }).toList();
+    } else if (_selectedSubTab == "Pending") {
+      filtered = _allCases.where((c) {
+        final s = (c['status'] ?? "").toString().toLowerCase();
+        return !s.contains("return");
+      }).toList();
+    } else {
+      filtered = List.from(_allCases);
+    }
+    setState(() => _cases = filtered);
+  }
+
+  void _onSubTabSelected(String tab) {
+    setState(() => _selectedSubTab = tab);
+    _applySubTab();
+  }
+
+  Widget _buildSubTabChip(String label, int count) {
+    final bool isSelected = _selectedSubTab == label;
+    return GestureDetector(
+      onTap: () => _onSubTabSelected(label),
+      child: Chip(
+        label: Text("$label ($count)",
+            style: TextStyle(
+                color: isSelected ? Colors.white : Colors.blueGrey,
+                fontWeight: FontWeight.bold,
+                fontSize: 12)),
+        backgroundColor: isSelected ? Colors.blueGrey : Colors.blueGrey.withOpacity(0.1),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: isSelected ? Colors.blueGrey : Colors.transparent)),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final int allCount = _allCases.length;
+    final int returnedCount = _allCases.where((c) => (c['status'] ?? "").toString().toLowerCase().contains("return")).length;
+    final int pendingCount = allCount - returnedCount;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -80,15 +132,39 @@ class _QcDashboardState extends State<QcDashboard> {
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _cases.isEmpty
-              ? const Center(child: Text("No cases pending QC review.", style: TextStyle(color: Colors.grey)))
-              : ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _cases.length,
-                  itemBuilder: (context, i) => _buildCard(_cases[i]),
-                ),
+      body: Column(
+        children: [
+          Container(
+            height: 50,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                _buildSubTabChip("All", allCount),
+                const SizedBox(width: 8),
+                _buildSubTabChip("Pending", pendingCount),
+                const SizedBox(width: 8),
+                _buildSubTabChip("Returned", returnedCount),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _cases.isEmpty
+                    ? const Center(child: Text("No cases in this view.", style: TextStyle(color: Colors.grey)))
+                    : RefreshIndicator(
+                        onRefresh: _load,
+                        child: ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _cases.length,
+                          itemBuilder: (context, i) => _buildCard(_cases[i]),
+                        ),
+                      ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -96,6 +172,11 @@ class _QcDashboardState extends State<QcDashboard> {
     String plate = item['vehicleNumber'] ?? "Unknown";
     String location = item['location'] ?? "Unknown";
     String applicant = item['applicantName'] ?? "Unknown";
+    String itemStatus = item['status'] ?? "";
+    bool redFlag = item['redFlag'] == true;
+    String? assignedTo = item['assignedTo']?.toString();
+    if (assignedTo != null && assignedTo.isEmpty) assignedTo = null;
+    bool isReturned = itemStatus.toLowerCase().contains("return");
 
     String? dateStr = item['createdAt'];
     int daysOld = 0;
@@ -103,8 +184,8 @@ class _QcDashboardState extends State<QcDashboard> {
       DateTime created = DateTime.tryParse(dateStr) ?? DateTime.now();
       daysOld = DateTime.now().difference(created).inDays;
     }
-    Color ageColor = daysOld > 30 ? Colors.red : Colors.green;
-    Color bgAge = daysOld > 30 ? Colors.red.shade50 : Colors.green.shade50;
+    Color ageColor = daysOld <= 1 ? Colors.green : daysOld == 2 ? Colors.orange : Colors.red;
+    Color bgAge = daysOld <= 1 ? Colors.green.shade50 : daysOld == 2 ? Colors.orange.shade50 : Colors.red.shade50;
 
     return Card(
       elevation: 2,
@@ -123,9 +204,20 @@ class _QcDashboardState extends State<QcDashboard> {
                   Text(plate, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
                   Text("$location • $applicant", style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-                  const SizedBox(height: 4),
-                  const Text("Step: QC",
-                      style: TextStyle(fontSize: 10, color: Colors.blueGrey, fontWeight: FontWeight.bold)),
+                  if (assignedTo != null) ...[
+                    const SizedBox(height: 2),
+                    Text("Assigned: $assignedTo", style: const TextStyle(fontSize: 11, color: Colors.blueGrey)),
+                  ],
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(color: Colors.blueGrey.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.blueGrey.shade200)),
+                      child: const Text("QC", style: TextStyle(fontSize: 10, color: Colors.blueGrey, fontWeight: FontWeight.bold)),
+                    ),
+                    if (redFlag) ...[const SizedBox(width: 6), const Text("⚑", style: TextStyle(color: Colors.red, fontSize: 14))],
+                    if (itemStatus.isNotEmpty) ...[const SizedBox(width: 6), Text(itemStatus, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isReturned ? Colors.red : Colors.blueGrey))],
+                  ]),
                 ],
               ),
             ),
@@ -135,17 +227,14 @@ class _QcDashboardState extends State<QcDashboard> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(color: bgAge, borderRadius: BorderRadius.circular(4)),
-                  child: Text("$daysOld Days Old",
+                  child: Text("TAT: ${daysOld}d",
                       style: TextStyle(color: ageColor, fontSize: 10, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 8),
                 SizedBox(
                   height: 30,
                   child: OutlinedButton(
-                    onPressed: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (_) => QcDetailPage(summaryData: item)))
-                          .then((_) => _load());
-                    },
+                    onPressed: () => navigateToCase(context, item, _load),
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(color: Colors.deepPurple.shade200),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -255,8 +344,13 @@ class _QcDetailPageState extends State<QcDetailPage> {
 
         _isLoading = false;
       });
-    } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to load case details: $e"), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -492,14 +586,14 @@ class _QcDetailPageState extends State<QcDetailPage> {
     if (!mounted) return;
     if (payRes['success'] != true) {
       // Log but continue — QC payload already includes payment fields.
-      print("WARN: separate payment save failed (non-fatal): ${payRes['message']}");
+      debugPrint("WARN: separate payment save failed (non-fatal): ${payRes['message']}");
     }
 
     // 3. startWorkflow(4) — ensure QC step is in InProgress
     final startRes = await api.startWorkflow(ctx["id"]!, 4, ctx["vNo"]!, ctx["contact"]!);
     if (!mounted) return;
     if (startRes['success'] != true) {
-      print("DEBUG: startWorkflow(4) on save failed (likely already started): ${startRes['message']}");
+      debugPrint("DEBUG: startWorkflow(4) on save failed (likely already started): ${startRes['message']}");
     }
 
     // 4. updateWorkflowTable for QC
@@ -520,7 +614,7 @@ class _QcDetailPageState extends State<QcDetailPage> {
     );
     if (!mounted) return;
     if (tableRes['success'] != true) {
-      print("DEBUG: updateWorkflowTable on save failed: ${tableRes['message']}");
+      debugPrint("DEBUG: updateWorkflowTable on save failed: ${tableRes['message']}");
     }
 
     // 5. Assign QC + Valuation (web portal does both)
@@ -588,7 +682,7 @@ class _QcDetailPageState extends State<QcDetailPage> {
     );
     if (!mounted) return;
     if (payRes['success'] != true) {
-      print("WARN: separate payment save failed: ${payRes['message']}");
+      debugPrint("WARN: separate payment save failed: ${payRes['message']}");
     }
 
     // 3. completeWorkflow(4) — close QC step
@@ -627,7 +721,7 @@ class _QcDetailPageState extends State<QcDetailPage> {
     );
     if (!mounted) return;
     if (tableRes['success'] != true) {
-      print("WARN: updateWorkflowTable failed after QC Submit: ${tableRes['message']}");
+      debugPrint("WARN: updateWorkflowTable failed after QC Submit: ${tableRes['message']}");
     }
 
     // 6. Assign QC + Valuation again (web portal does on submit)
@@ -835,6 +929,47 @@ class _QcDetailPageState extends State<QcDetailPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.green));
   }
 
+  void _showFullScreenImage(String url, String label) {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: EdgeInsets.zero,
+        child: Stack(
+          children: [
+            Center(
+              child: InteractiveViewer(
+                child: Image.network(
+                  url,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Center(
+                    child: Icon(Icons.broken_image, color: Colors.white, size: 64),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 16,
+              left: 16,
+              right: 48,
+              child: Text(label,
+                  style: const TextStyle(color: Colors.white, fontSize: 14,
+                      shadows: [Shadow(blurRadius: 4, color: Colors.black)])),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ===========================================================================
   // BUILD
   // ===========================================================================
@@ -929,10 +1064,13 @@ class _QcDetailPageState extends State<QcDetailPage> {
               const SizedBox(width: 8),
               _buildWorkflowChip("QC", true),
               const SizedBox(width: 8),
-              _buildWorkflowChip("Final Report", false, onTap: () {
-                Navigator.push(context, MaterialPageRoute(
-                    builder: (_) => FinalReportDetailPage(summaryData: widget.summaryData)));
-              }),
+              _buildWorkflowChip("Final Report", false,
+                locked: currentUserRoleLevel < 5,
+                onTap: currentUserRoleLevel >= 5 ? () {
+                  Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => FinalReportDetailPage(summaryData: widget.summaryData)));
+                } : null,
+              ),
             ]),
           ),
         ],
@@ -940,7 +1078,26 @@ class _QcDetailPageState extends State<QcDetailPage> {
     );
   }
 
-  Widget _buildWorkflowChip(String label, bool active, {VoidCallback? onTap}) {
+  Widget _buildWorkflowChip(String label, bool active,
+      {VoidCallback? onTap, bool locked = false}) {
+    if (locked) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+            color: Colors.grey[100],
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.grey.shade300)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.lock_outline, size: 12, color: Colors.grey[400]),
+          const SizedBox(width: 4),
+          Text(label,
+              style: TextStyle(
+                  color: Colors.grey[400],
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500)),
+        ]),
+      );
+    }
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -1178,6 +1335,21 @@ class _QcDetailPageState extends State<QcDetailPage> {
           },
         ),
 
+        // ── QC Officer (read-only) ──
+        _buildReadOnly(
+          "QC Officer",
+          FirebaseAuth.instance.currentUser?.displayName ??
+              (widget.summaryData['assignedTo']?.toString().isNotEmpty == true
+                  ? widget.summaryData['assignedTo'].toString()
+                  : 'QC Officer'),
+        ),
+
+        // ── QC Review Date (read-only, today) ──
+        _buildReadOnly(
+          "QC Review Date",
+          DateFormat('d MMM yyyy').format(DateTime.now()),
+        ),
+
         // ── Remarks ──
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -1343,14 +1515,6 @@ class _QcDetailPageState extends State<QcDetailPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ElevatedButton(
-              onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => VehicleMediaPage(valuationId: _ctx()["id"]!))),
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF3F51B5), foregroundColor: Colors.white),
-              child: const Text("View / Upload Images"),
-            ),
-            const SizedBox(height: 16),
             if (entries.isEmpty)
               const Text("No photos available.", style: TextStyle(color: Colors.grey, fontStyle: FontStyle.italic))
             else
@@ -1371,28 +1535,31 @@ class _QcDetailPageState extends State<QcDetailPage> {
                     child: Column(
                       children: [
                         Expanded(
-                          child: ClipRRect(
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
-                            child: Image.network(
-                              e.value.toString(),
-                              fit: BoxFit.cover,
-                              width: double.infinity,
-                              errorBuilder: (_, __, ___) => Container(
-                                color: Colors.grey.shade200,
-                                child: const Center(
-                                  child: Icon(Icons.broken_image, color: Colors.grey, size: 40),
+                          child: GestureDetector(
+                            onTap: () => _showFullScreenImage(e.value.toString(), e.key),
+                            child: ClipRRect(
+                              borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                              child: Image.network(
+                                e.value.toString(),
+                                fit: BoxFit.cover,
+                                width: double.infinity,
+                                errorBuilder: (_, __, ___) => Container(
+                                  color: Colors.grey.shade200,
+                                  child: const Center(
+                                    child: Icon(Icons.broken_image, color: Colors.grey, size: 40),
+                                  ),
                                 ),
+                                loadingBuilder: (ctx, child, prog) => prog == null
+                                    ? child
+                                    : Container(
+                                        color: Colors.grey.shade100,
+                                        child: const Center(
+                                            child: SizedBox(
+                                                height: 24,
+                                                width: 24,
+                                                child: CircularProgressIndicator(strokeWidth: 2))),
+                                      ),
                               ),
-                              loadingBuilder: (ctx, child, prog) => prog == null
-                                  ? child
-                                  : Container(
-                                      color: Colors.grey.shade100,
-                                      child: const Center(
-                                          child: SizedBox(
-                                              height: 24,
-                                              width: 24,
-                                              child: CircularProgressIndicator(strokeWidth: 2))),
-                                    ),
                             ),
                           ),
                         ),

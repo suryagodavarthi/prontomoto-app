@@ -18,12 +18,10 @@ class BackendDashboard extends StatefulWidget {
 
 class _BackendDashboardState extends State<BackendDashboard> {
   final ApiService api = ApiService();
-  List<dynamic> _allCases = []; 
-  List<dynamic> _visibleCases = [];
+  List<dynamic> _allCases = [];
+  List<dynamic> _cases = [];
   bool _isLoading = true;
-  String _selectedTab = "Backend"; 
-  
-  Map<String, int> _counts = {"All": 0, "Stakeholder": 0, "Backend": 0, "AVO": 0, "QC": 0, "FinalReport": 0};
+  String _selectedSubTab = "All";
 
   @override
   void initState() {
@@ -34,49 +32,51 @@ class _BackendDashboardState extends State<BackendDashboard> {
   void _loadDashboardData() async {
     setState(() => _isLoading = true);
     try {
-      _allCases = await api.getOpenValuations();
-      _allCases.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
-
-      _counts = {"All": _allCases.length, "Stakeholder": 0, "Backend": 0, "AVO": 0, "QC": 0, "FinalReport": 0};
-      for (var item in _allCases) {
-        String wf = (item['workflow'] ?? "").toString().toLowerCase();
-        if (wf.contains("stakeholder")) _counts["Stakeholder"] = _counts["Stakeholder"]! + 1;
-        else if (wf.contains("backend")) _counts["Backend"] = _counts["Backend"]! + 1;
-        else if (wf.contains("avo") || wf.contains("inspection")) _counts["AVO"] = _counts["AVO"]! + 1;
-        else if (wf.contains("qc") || wf.contains("quality")) _counts["QC"] = _counts["QC"]! + 1;
-        else _counts["FinalReport"] = _counts["FinalReport"]! + 1;
-      }
-
+      final all = await api.getOpenValuations();
+      all.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
+      // Filter to Backend step only
+      final filtered = all.where((c) {
+        final wf = (c['workflow'] ?? "").toString().toLowerCase();
+        return wf.contains("backend");
+      }).toList();
       if (mounted) {
-        _applyFilter();
+        setState(() {
+          _allCases = filtered;
+          _isLoading = false;
+        });
+        _applySubTab();
       }
     } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to load cases: $e"), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
-  void _applyFilter() {
-    List<dynamic> filtered = [];
-    for (var item in _allCases) {
-      String wf = (item['workflow'] ?? "").toString().toLowerCase();
-      if (_selectedTab == "All") filtered.add(item);
-      else if (_selectedTab == "Stakeholder" && wf.contains("stakeholder")) filtered.add(item);
-      else if (_selectedTab == "Backend" && wf.contains("backend")) filtered.add(item);
-      else if (_selectedTab == "AVO" && (wf.contains("avo") || wf.contains("inspection"))) filtered.add(item);
-      else if (_selectedTab == "QC" && (wf.contains("qc") || wf.contains("quality"))) filtered.add(item);
-      else if (_selectedTab == "FinalReport" && wf.contains("final")) filtered.add(item);
+  void _applySubTab() {
+    List<dynamic> filtered;
+    if (_selectedSubTab == "Returned") {
+      filtered = _allCases.where((c) {
+        final s = (c['status'] ?? "").toString().toLowerCase();
+        return s.contains("return");
+      }).toList();
+    } else if (_selectedSubTab == "Pending") {
+      filtered = _allCases.where((c) {
+        final s = (c['status'] ?? "").toString().toLowerCase();
+        return !s.contains("return");
+      }).toList();
+    } else {
+      filtered = List.from(_allCases);
     }
-    setState(() {
-      _visibleCases = filtered;
-      _isLoading = false;
-    });
+    setState(() => _cases = filtered);
   }
 
-  void _onTabSelected(String tab) {
-    setState(() {
-      _selectedTab = tab;
-      _applyFilter();
-    });
+  void _onSubTabSelected(String tab) {
+    setState(() => _selectedSubTab = tab);
+    _applySubTab();
   }
 
   @override
@@ -111,17 +111,11 @@ class _BackendDashboardState extends State<BackendDashboard> {
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
-                _buildTabChip("All", _counts["All"]!),
+                _buildTabChip("All", _allCases.length),
                 const SizedBox(width: 8),
-                _buildTabChip("Stakeholder", _counts["Stakeholder"]!),
+                _buildTabChip("Pending", _allCases.where((c) => !(c['status'] ?? "").toString().toLowerCase().contains("return")).length),
                 const SizedBox(width: 8),
-                _buildTabChip("Backend", _counts["Backend"]!),
-                const SizedBox(width: 8),
-                _buildTabChip("AVO", _counts["AVO"]!),
-                const SizedBox(width: 8),
-                _buildTabChip("QC", _counts["QC"]!),
-                const SizedBox(width: 8),
-                _buildTabChip("FinalReport", _counts["FinalReport"]!),
+                _buildTabChip("Returned", _allCases.where((c) => (c['status'] ?? "").toString().toLowerCase().contains("return")).length),
               ],
             ),
           ),
@@ -129,12 +123,12 @@ class _BackendDashboardState extends State<BackendDashboard> {
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _visibleCases.isEmpty
-                    ? const Center(child: Text("No pending cases in this tab.", style: TextStyle(color: Colors.grey)))
+                : _cases.isEmpty
+                    ? const Center(child: Text("No cases in this view.", style: TextStyle(color: Colors.grey)))
                     : ListView.builder(
                         padding: const EdgeInsets.all(16),
-                        itemCount: _visibleCases.length,
-                        itemBuilder: (context, index) => _buildCard(_visibleCases[index]),
+                        itemCount: _cases.length,
+                        itemBuilder: (context, index) => _buildCard(_cases[index]),
                       ),
           ),
         ],
@@ -143,9 +137,9 @@ class _BackendDashboardState extends State<BackendDashboard> {
   }
 
   Widget _buildTabChip(String label, int count) {
-    bool isSelected = _selectedTab == label;
+    bool isSelected = _selectedSubTab == label;
     return GestureDetector(
-      onTap: () => _onTabSelected(label),
+      onTap: () => _onSubTabSelected(label),
       child: Chip(
         label: Text("$label ($count)", style: TextStyle(color: isSelected ? Colors.white : Colors.green, fontWeight: FontWeight.bold)),
         backgroundColor: isSelected ? Colors.green : Colors.green.withOpacity(0.1),
@@ -154,11 +148,27 @@ class _BackendDashboardState extends State<BackendDashboard> {
     );
   }
 
+  Color _tatColor(int days) {
+    if (days <= 1) return Colors.green;
+    if (days == 2) return Colors.orange;
+    return Colors.red;
+  }
+
+  Color _tatBgColor(int days) {
+    if (days <= 1) return Colors.green.shade50;
+    if (days == 2) return Colors.orange.shade50;
+    return Colors.red.shade50;
+  }
+
   Widget _buildCard(Map<String, dynamic> item) {
     String plate = item['vehicleNumber'] ?? "Unknown";
     String location = item['location'] ?? "Unknown";
     String applicant = item['applicantName'] ?? "Unknown";
-    String status = item['workflow'] ?? "Backend"; 
+    String status = item['workflow'] ?? "Backend";
+    String itemStatus = item['status'] ?? "";
+    bool redFlag = item['redFlag'] == true;
+    String? assignedTo = item['assignedTo']?.toString();
+    if (assignedTo != null && assignedTo.isEmpty) assignedTo = null;
 
     String? dateStr = item['createdAt'];
     int daysOld = 0;
@@ -167,8 +177,10 @@ class _BackendDashboardState extends State<BackendDashboard> {
       daysOld = DateTime.now().difference(created).inDays;
     }
 
-    Color ageColor = daysOld > 30 ? Colors.red : Colors.green;
-    Color bgAgeColor = daysOld > 30 ? Colors.red.shade50 : Colors.green.shade50;
+    Color ageColor = _tatColor(daysOld);
+    Color bgAgeColor = _tatBgColor(daysOld);
+
+    bool isReturned = itemStatus.toLowerCase().contains("return");
 
     return Card(
       elevation: 2,
@@ -187,8 +199,39 @@ class _BackendDashboardState extends State<BackendDashboard> {
                   Text(plate, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
                   Text("$location • $applicant", style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-                  const SizedBox(height: 4),
-                  Text("Step: $status", style: const TextStyle(fontSize: 10, color: Colors.blueGrey, fontWeight: FontWeight.bold)),
+                  if (assignedTo != null) ...[
+                    const SizedBox(height: 2),
+                    Text("Assigned: $assignedTo", style: const TextStyle(fontSize: 11, color: Colors.blueGrey)),
+                  ],
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.blueGrey.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.blueGrey.shade200),
+                        ),
+                        child: Text(status, style: const TextStyle(fontSize: 10, color: Colors.blueGrey, fontWeight: FontWeight.bold)),
+                      ),
+                      if (redFlag) ...[
+                        const SizedBox(width: 6),
+                        const Text("⚑", style: TextStyle(color: Colors.red, fontSize: 14)),
+                      ],
+                      if (itemStatus.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        Text(
+                          itemStatus,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: isReturned ? Colors.red : Colors.blueGrey,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -198,22 +241,13 @@ class _BackendDashboardState extends State<BackendDashboard> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(color: bgAgeColor, borderRadius: BorderRadius.circular(4)),
-                  child: Text("$daysOld Days Old", style: TextStyle(color: ageColor, fontSize: 10, fontWeight: FontWeight.bold)),
+                  child: Text("TAT: ${daysOld}d", style: TextStyle(color: ageColor, fontSize: 10, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 8),
                 SizedBox(
                   height: 30,
                   child: OutlinedButton(
-                    onPressed: () {
-                      String wf = status.toLowerCase();
-                      if (wf.contains("backend")) {
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => BackendCaseDetailsPage(summaryData: item))).then((_) => _loadDashboardData());
-                      } else if (wf.contains("avo") || wf.contains("inspection")) {
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => InspectionFormPage(summaryData: item))).then((_) => _loadDashboardData());
-                      } else {
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => VehicleDetailsPage(summaryData: item))).then((_) => _loadDashboardData());
-                      }
-                    },
+                    onPressed: () => navigateToCase(context, item, _loadDashboardData),
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(color: Colors.deepPurple.shade200),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -221,7 +255,7 @@ class _BackendDashboardState extends State<BackendDashboard> {
                     ),
                     child: const Text("ENTER", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                   ),
-                )
+                ),
               ],
             )
           ],
@@ -256,7 +290,7 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
   final List<String> _vehicleClasses = ["Private", "Commercial", "Transport", "Non-Transport"];
   final List<String> _normsTypes = ["Bharat Stage III", "Bharat Stage IV", "Bharat Stage VI", "Euro 3", "Euro 4"];
   final List<String> _ownersList = ["1", "2", "3", "4", "5+"];
-  final List<String> _assigneeList = ["SHEKHAR (AVO)", "Final Report Team", "Admin"];
+  List<String> _assigneeList = ["SHEKHAR (AVO)", "Final Report Team", "Admin"];
 
   String? _selectedAssignee;
 
@@ -338,17 +372,36 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
     var ctx = _getSafeContext();
     if (ctx["id"]!.isEmpty) { setState(() => _isLoading = false); return; }
 
-    var details = await api.getBackendVehicleDetails(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!); 
-    var stakeholderDetails = await api.getValuationDetails(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!); 
+    var details = await api.getBackendVehicleDetails(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
+    var stakeholderDetails = await api.getValuationDetails(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
     var fetchedNotes = await api.getNotes(ctx["id"]!);
+
+    // Load assignee list from API (AVO role users), fall back to defaults on error
+    try {
+      final avoUsers = await api.getUsersByRole('avo');
+      final frUsers = await api.getUsersByRole('finalreport');
+      final allUsers = [...avoUsers, ...frUsers];
+      if (allUsers.isNotEmpty) {
+        final names = allUsers.map((u) {
+          final name = u['name']?.toString() ?? u['userName']?.toString() ?? '';
+          final role = u['role']?.toString() ?? '';
+          return name.isNotEmpty ? '$name ($role)' : '';
+        }).where((s) => s.isNotEmpty).toList();
+        if (names.isNotEmpty && mounted) {
+          setState(() => _assigneeList = names);
+        }
+      }
+    } catch (_) {
+      // Keep default list on failure
+    }
 
     if (mounted) {
       setState(() {
         _fullData = {};
         _fullData.addAll(widget.summaryData);
-        _fullData.addAll(stakeholderDetails); 
-        _fullData.addAll(details); 
-        
+        _fullData.addAll(stakeholderDetails);
+        _fullData.addAll(details);
+
         _notes = fetchedNotes;
         _populateControllers();
         _isLoading = false;
@@ -525,7 +578,7 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
         "Lender": _lenderController.text,
         "Hypothecation": _hypothecation,
         "RcStatus": _rcStatus,
-        "BacklistStatus": _blacklistStatus,
+        "BlacklistStatus": _blacklistStatus,
         "Insurer": _insurerController.text,
         "InsurancePolicyNo": _policyNoController.text,
         "InsuranceValidUpTo": _insuranceValidController.text,
@@ -602,7 +655,7 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
       }
 
     } catch (e, stackTrace) {
-      print("Submit Error: $e\n$stackTrace");
+      debugPrint("Submit Error: $e\n$stackTrace");
       if (mounted) {
         setState(() { _isSaving = false; _isSubmitting = false; });
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("App Error: $e"), backgroundColor: Colors.red));
@@ -611,11 +664,37 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
   }
 
   Future<void> _handleReject() async {
+    final reasonController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Reject to Stakeholder"),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text("This case will be returned to Stakeholder stage.", style: TextStyle(color: Colors.grey, fontSize: 13)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: reasonController,
+            autofocus: true,
+            maxLines: 3,
+            decoration: const InputDecoration(border: OutlineInputBorder(), hintText: "Enter reason for rejection..."),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Reject"),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
     setState(() => _isRejecting = true);
-    
     try {
       var ctx = _getSafeContext();
-      
+
       int stepOrder = 2;
       if (widget.summaryData['workflowStepOrder'] != null) {
         stepOrder = int.tryParse(widget.summaryData['workflowStepOrder'].toString()) ?? 2;
@@ -623,8 +702,10 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
         stepOrder = int.tryParse(widget.summaryData['stepOrder'].toString()) ?? 2;
       }
 
-      var rejectResult = await api.rejectToPreviousStage(ctx["id"]!, stepOrder, ctx["vNo"]!, ctx["contact"]!);
-      
+      final reason = reasonController.text.trim();
+      var rejectResult = await api.rejectToPreviousStage(ctx["id"]!, stepOrder, ctx["vNo"]!, ctx["contact"]!,
+          reason: reason.isNotEmpty ? reason : "Rejected from Backend review");
+
       if (!mounted) return;
       setState(() => _isRejecting = false);
 
@@ -694,27 +775,55 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
             const SizedBox(width: 8),
             _buildWorkflowChip("Backend", true),
             const SizedBox(width: 8),
-            _buildWorkflowChip("AVO", false, onTap: () {
-              Navigator.push(context, MaterialPageRoute(
-                  builder: (_) => InspectionFormPage(summaryData: widget.summaryData, initialTab: "AVO")));
-            }),
+            _buildWorkflowChip("AVO", false,
+              locked: currentUserRoleLevel < 3,
+              onTap: currentUserRoleLevel >= 3 ? () {
+                Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => InspectionFormPage(summaryData: widget.summaryData, initialTab: "AVO")));
+              } : null,
+            ),
             const SizedBox(width: 8),
-            _buildWorkflowChip("QC", false, onTap: () {
-              Navigator.push(context, MaterialPageRoute(
-                  builder: (_) => QcDetailPage(summaryData: widget.summaryData)));
-            }),
+            _buildWorkflowChip("QC", false,
+              locked: currentUserRoleLevel < 4,
+              onTap: currentUserRoleLevel >= 4 ? () {
+                Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => QcDetailPage(summaryData: widget.summaryData)));
+              } : null,
+            ),
             const SizedBox(width: 8),
-            _buildWorkflowChip("Final Report", false, onTap: () {
-              Navigator.push(context, MaterialPageRoute(
-                  builder: (_) => FinalReportDetailPage(summaryData: widget.summaryData)));
-            }),
+            _buildWorkflowChip("Final Report", false,
+              locked: currentUserRoleLevel < 5,
+              onTap: currentUserRoleLevel >= 5 ? () {
+                Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => FinalReportDetailPage(summaryData: widget.summaryData)));
+              } : null,
+            ),
           ]),
         ),
       ]),
     );
   }
 
-  Widget _buildWorkflowChip(String label, bool active, {VoidCallback? onTap}) {
+  Widget _buildWorkflowChip(String label, bool active,
+      {VoidCallback? onTap, bool locked = false}) {
+    if (locked) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+            color: Colors.grey[100],
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.grey.shade300)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.lock_outline, size: 12, color: Colors.grey[400]),
+          const SizedBox(width: 4),
+          Text(label,
+              style: TextStyle(
+                  color: Colors.grey[400],
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500)),
+        ]),
+      );
+    }
     return InkWell(
       onTap: onTap,
       child: Container(

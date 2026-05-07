@@ -6,8 +6,6 @@ import 'vehicle_media_page.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'main.dart';
 import 'backend_dashboard.dart';
 import 'qc_dashboard.dart';
@@ -30,6 +28,9 @@ const Map<String, List<String>> _avoVisibilityMap = {
     'interiorCondition', 'gearboxAssembly', 'clutchSystem', 'driveShafts', 'propellerShaft',
     'differentialAssy', 'radiator', 'interCooler', 'allHosePipes', 'paintWork', 'vinPlate',
     'vehicleMoved', 'engineStarted', 'roadWorthyCondition', 'otherAccessoryFitment',
+    'parkingBrake', 'abs', 'tailLightsIndicators', 'wiringAssy',
+    'frontCrashGuard', 'rearCrashGuard',
+    'airBags', 'sunRoof', 'sideFenders',
   ],
   'cv': [
     'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
@@ -41,6 +42,9 @@ const Map<String, List<String>> _avoVisibilityMap = {
     'seats', 'upholestry', 'interiorTrims', 'front', 'rear', 'axles', 'airConditioner', 'audio',
     'paintWork', 'rightSideWing', 'leftSideWing', 'tailGate', 'loadFloor', 'vinPlate',
     'vehicleMoved', 'engineStarted', 'roadWorthyCondition', 'otherAccessoryFitment',
+    'parkingBrake', 'abs', 'tailLightsIndicators', 'wiringAssy',
+    'frontCrashGuard', 'rearCrashGuard',
+    'hydraulicLift', 'sideUnderRunProtection',
   ],
   'two-wheeler': [
     'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
@@ -49,6 +53,10 @@ const Map<String, List<String>> _avoVisibilityMap = {
     'gearboxAssembly', 'clutchSystem', 'steeringHandle', 'frontForkAssy', 'mudguards',
     'frontFairing', 'rearCowls', 'seats', 'speedoMeter', 'front', 'rear', 'paintWork',
     'vinPlate', 'vehicleMoved', 'engineStarted', 'roadWorthyCondition', 'otherAccessoryFitment',
+    'mainStand', 'sideStand', 'frontMudGuard', 'rearMudGuard', 'fuelTankCondition',
+    'chainSprocket', 'frontBrakeCondition', 'rearBrakeCondition', 'headLight', 'tailLight',
+    'indicators', 'hornCondition', 'mirrorCondition', 'seatCondition', 'handleBarGrips',
+    'footRest', 'alloyWheelRim',
   ],
   'three-wheeler': [
     'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
@@ -60,6 +68,8 @@ const Map<String, List<String>> _avoVisibilityMap = {
     'upholestry', 'interiorTrims', 'front', 'rear', 'axles', 'airConditioner', 'audio',
     'paintWork', 'vinPlate', 'vehicleMoved', 'engineStarted', 'roadWorthyCondition',
     'otherAccessoryFitment',
+    'parkingBrake', 'abs', 'tailLightsIndicators', 'wiringAssy',
+    'frontCrashGuard', 'rearCrashGuard',
   ],
   'tractor': [
     'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
@@ -69,6 +79,10 @@ const Map<String, List<String>> _avoVisibilityMap = {
     'allHosePipes', 'steeringWheel', 'steeringColumn', 'steeringBox', 'steeringLinkages',
     'bonnet', 'bumpers', 'mudguards', 'seats', 'front', 'rear', 'axles', 'paintWork',
     'vinPlate', 'vehicleMoved', 'engineStarted', 'roadWorthyCondition', 'otherAccessoryFitment',
+    'rightIndividualBrakes', 'leftIndividualBrakes', 'threePointLinkage', 'powerTakeOff',
+    'hitchSystem', 'hydraulicLiftFe', 'frontWeights', 'rearWeights', 'ropsCanopy',
+    'frontTyreCondition', 'rearTyreCondition', 'implementAttachments', 'fuelTankFe',
+    'frontAxleFe', 'rearDrawbar',
   ],
   'ce': [
     'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
@@ -80,6 +94,24 @@ const Map<String, List<String>> _avoVisibilityMap = {
     'hydraulicCylinders', 'swingUnit', 'dashBoard', 'seats', 'upholestry', 'interiorTrims',
     'front', 'rear', 'axles', 'airConditioner', 'paintWork', 'vinPlate', 'vehicleMoved',
     'engineStarted', 'roadWorthyCondition', 'otherAccessoryFitment',
+    'retarder', 'differentialLock', 'pto', 'hydraulicSystem', 'boomArm', 'bucketCondition',
+    'bladeCondition', 'liftingCapacity', 'tyreConditionCe', 'underCarriage', 'crawlerTracks',
+    'steelRims', 'attachmentCondition', 'cabCondition', 'counterWeight', 'rockBreaker',
+  ],
+  'bus': [
+    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
+    'engineCondition', 'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricalSystem',
+    'suspensionSystem', 'fuelSystem', 'tyreCondition', 'bodyCondition', 'cabinCondition',
+    'exteriorCondition', 'interiorCondition', 'gearboxAssembly', 'clutchSystem', 'propellerShaft',
+    'differentialAssy', 'radiator', 'interCooler', 'allHosePipes', 'steeringWheel', 'steeringColumn',
+    'steeringBox', 'steeringLinkages', 'bumpers', 'doors', 'mudguards', 'allGlasses', 'dashBoard',
+    'seats', 'upholestry', 'interiorTrims', 'front', 'rear', 'axles', 'airConditioner', 'audio',
+    'paintWork', 'vinPlate', 'vehicleMoved', 'engineStarted', 'roadWorthyCondition',
+    'otherAccessoryFitment',
+    'parkingBrake', 'abs', 'tailLightsIndicators', 'wiringAssy',
+    'frontCrashGuard', 'rearCrashGuard',
+    'coachCondition', 'passengerSeats', 'emergencyExits', 'luggageCompartment',
+    'acSystem', 'destinationBoard', 'sideMirrors',
   ],
 };
 
@@ -95,8 +127,9 @@ String? _normalizeValuationType(String raw) {
   if (lower == 'cv') return 'cv';
   if (lower.contains('two') || lower.contains('2-wheel') || lower.contains('2 wheel')) return 'two-wheeler';
   if (lower.contains('three') || lower.contains('3-wheel') || lower.contains('3 wheel')) return 'three-wheeler';
-  if (lower.contains('tractor')) return 'tractor';
+  if (lower.contains('tractor') || lower == 'fe' || lower.contains('farm')) return 'tractor';
   if (lower.contains('construction') || lower == 'ce') return 'ce';
+  if (lower.contains('bus') || lower.contains('coach')) return 'bus';
   return null;
 }
 
@@ -116,10 +149,8 @@ class _AvoDashboardState extends State<AvoDashboard> {
   final ApiService _api = ApiService();
   bool _isLoading = true;
   List<dynamic> _allCases = [];
-  List<dynamic> _visibleCases = [];
-
-  Map<String, int> _counts = {"All": 0, "Stakeholder": 0, "Backend": 0, "AVO": 0, "QC": 0, "FinalReport": 0};
-  String _selectedTab = "AVO";
+  List<dynamic> _cases = [];
+  String _selectedSubTab = "All";
 
   @override
   void initState() {
@@ -130,60 +161,51 @@ class _AvoDashboardState extends State<AvoDashboard> {
   Future<void> _loadDashboardData() async {
     setState(() => _isLoading = true);
     try {
-      _allCases = await _api.getOpenValuations();
-      _allCases.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
-
-      _counts = {"All": _allCases.length, "Stakeholder": 0, "Backend": 0, "AVO": 0, "QC": 0, "FinalReport": 0};
-      for (var item in _allCases) {
-        String wf = (item['workflow'] ?? "").toString().toLowerCase();
-        if (wf.contains("stakeholder")) {
-          _counts["Stakeholder"] = _counts["Stakeholder"]! + 1;
-        } else if (wf.contains("backend")) {
-          _counts["Backend"] = _counts["Backend"]! + 1;
-        } else if (wf.contains("avo") || wf.contains("inspection")) {
-          _counts["AVO"] = _counts["AVO"]! + 1;
-        } else if (wf.contains("qc") || wf.contains("quality")) {
-          _counts["QC"] = _counts["QC"]! + 1;
-        } else {
-          _counts["FinalReport"] = _counts["FinalReport"]! + 1;
-        }
+      final all = await _api.getOpenValuations();
+      all.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
+      // Filter to AVO/Inspection step only
+      final filtered = all.where((c) {
+        final wf = (c['workflow'] ?? "").toString().toLowerCase();
+        return wf.contains("avo") || wf.contains("inspection");
+      }).toList();
+      if (mounted) {
+        setState(() {
+          _allCases = filtered;
+          _isLoading = false;
+        });
+        _applySubTab();
       }
-
-      if (mounted) _applyFilter();
     } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  void _applyFilter() {
-    List<dynamic> filtered = [];
-    for (var item in _allCases) {
-      String wf = (item['workflow'] ?? "").toString().toLowerCase();
-      if (_selectedTab == "All") {
-        filtered.add(item);
-      } else if (_selectedTab == "Stakeholder" && wf.contains("stakeholder")) {
-        filtered.add(item);
-      } else if (_selectedTab == "Backend" && wf.contains("backend")) {
-        filtered.add(item);
-      } else if (_selectedTab == "AVO" && (wf.contains("avo") || wf.contains("inspection"))) {
-        filtered.add(item);
-      } else if (_selectedTab == "QC" && (wf.contains("qc") || wf.contains("quality"))) {
-        filtered.add(item);
-      } else if (_selectedTab == "FinalReport" && wf.contains("final")) {
-        filtered.add(item);
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to load cases: $e"), backgroundColor: Colors.red),
+        );
       }
     }
-    setState(() {
-      _visibleCases = filtered;
-      _isLoading = false;
-    });
   }
 
-  void _onTabSelected(String tab) {
-    setState(() {
-      _selectedTab = tab;
-      _applyFilter();
-    });
+  void _applySubTab() {
+    List<dynamic> filtered;
+    if (_selectedSubTab == "Returned") {
+      filtered = _allCases.where((c) {
+        final s = (c['status'] ?? "").toString().toLowerCase();
+        return s.contains("return");
+      }).toList();
+    } else if (_selectedSubTab == "Pending") {
+      filtered = _allCases.where((c) {
+        final s = (c['status'] ?? "").toString().toLowerCase();
+        return !s.contains("return");
+      }).toList();
+    } else {
+      filtered = List.from(_allCases);
+    }
+    setState(() => _cases = filtered);
+  }
+
+  void _onSubTabSelected(String tab) {
+    setState(() => _selectedSubTab = tab);
+    _applySubTab();
   }
 
   @override
@@ -222,17 +244,11 @@ class _AvoDashboardState extends State<AvoDashboard> {
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
-                _buildTabChip("All", _counts["All"]!),
+                _buildTabChip("All", _allCases.length),
                 const SizedBox(width: 8),
-                _buildTabChip("Stakeholder", _counts["Stakeholder"]!),
+                _buildTabChip("Pending", _allCases.where((c) => !(c['status'] ?? "").toString().toLowerCase().contains("return")).length),
                 const SizedBox(width: 8),
-                _buildTabChip("Backend", _counts["Backend"]!),
-                const SizedBox(width: 8),
-                _buildTabChip("AVO", _counts["AVO"]!),
-                const SizedBox(width: 8),
-                _buildTabChip("QC", _counts["QC"]!),
-                const SizedBox(width: 8),
-                _buildTabChip("FinalReport", _counts["FinalReport"]!),
+                _buildTabChip("Returned", _allCases.where((c) => (c['status'] ?? "").toString().toLowerCase().contains("return")).length),
               ],
             ),
           ),
@@ -240,12 +256,12 @@ class _AvoDashboardState extends State<AvoDashboard> {
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _visibleCases.isEmpty
-                    ? const Center(child: Text("No pending cases in this tab.", style: TextStyle(color: Colors.grey)))
+                : _cases.isEmpty
+                    ? const Center(child: Text("No cases in this view.", style: TextStyle(color: Colors.grey)))
                     : ListView.builder(
                         padding: const EdgeInsets.all(16),
-                        itemCount: _visibleCases.length,
-                        itemBuilder: (context, index) => _buildCard(_visibleCases[index]),
+                        itemCount: _cases.length,
+                        itemBuilder: (context, index) => _buildCard(_cases[index]),
                       ),
           ),
         ],
@@ -254,9 +270,9 @@ class _AvoDashboardState extends State<AvoDashboard> {
   }
 
   Widget _buildTabChip(String label, int count) {
-    bool isSelected = _selectedTab == label;
+    bool isSelected = _selectedSubTab == label;
     return GestureDetector(
-      onTap: () => _onTabSelected(label),
+      onTap: () => _onSubTabSelected(label),
       child: Chip(
         label: Text("$label ($count)",
             style: TextStyle(color: isSelected ? Colors.white : Colors.green, fontWeight: FontWeight.bold)),
@@ -272,7 +288,12 @@ class _AvoDashboardState extends State<AvoDashboard> {
     String plate = item['vehicleNumber'] ?? "Unknown";
     String location = item['location'] ?? "Unknown";
     String applicant = item['applicantName'] ?? "Unknown";
-    String status = item['workflow'] ?? "AVO";
+    String workflow = item['workflow'] ?? "AVO";
+    String itemStatus = item['status'] ?? "";
+    bool redFlag = item['redFlag'] == true;
+    String? assignedTo = item['assignedTo']?.toString();
+    if (assignedTo != null && assignedTo.isEmpty) assignedTo = null;
+    bool isReturned = itemStatus.toLowerCase().contains("return");
 
     String? dateStr = item['createdAt'];
     int daysOld = 0;
@@ -281,8 +302,8 @@ class _AvoDashboardState extends State<AvoDashboard> {
       daysOld = DateTime.now().difference(created).inDays;
     }
 
-    Color ageColor = daysOld > 30 ? Colors.red : Colors.green;
-    Color bgAgeColor = daysOld > 30 ? Colors.red.shade50 : Colors.green.shade50;
+    Color ageColor = daysOld <= 1 ? Colors.green : daysOld == 2 ? Colors.orange : Colors.red;
+    Color bgAgeColor = daysOld <= 1 ? Colors.green.shade50 : daysOld == 2 ? Colors.orange.shade50 : Colors.red.shade50;
 
     return Card(
       elevation: 2,
@@ -301,9 +322,31 @@ class _AvoDashboardState extends State<AvoDashboard> {
                   Text(plate, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
                   Text("$location • $applicant", style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-                  const SizedBox(height: 4),
-                  Text("Step: $status",
-                      style: const TextStyle(fontSize: 10, color: Colors.blueGrey, fontWeight: FontWeight.bold)),
+                  if (assignedTo != null) ...[
+                    const SizedBox(height: 2),
+                    Text("Assigned: $assignedTo", style: const TextStyle(fontSize: 11, color: Colors.blueGrey)),
+                  ],
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                          color: Colors.blueGrey.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.blueGrey.shade200)),
+                      child: Text(workflow,
+                          style: const TextStyle(fontSize: 10, color: Colors.blueGrey, fontWeight: FontWeight.bold)),
+                    ),
+                    if (redFlag) ...[const SizedBox(width: 6), const Text("⚑", style: TextStyle(color: Colors.red, fontSize: 14))],
+                    if (itemStatus.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Text(itemStatus,
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: isReturned ? Colors.red : Colors.blueGrey))
+                    ],
+                  ]),
                 ],
               ),
             ),
@@ -313,27 +356,14 @@ class _AvoDashboardState extends State<AvoDashboard> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(color: bgAgeColor, borderRadius: BorderRadius.circular(4)),
-                  child: Text("$daysOld Days Old",
+                  child: Text("TAT: ${daysOld}d",
                       style: TextStyle(color: ageColor, fontSize: 10, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 8),
                 SizedBox(
                   height: 30,
                   child: OutlinedButton(
-                    onPressed: () {
-                      String wf = status.toLowerCase();
-                      if (wf.contains("backend")) {
-                        Navigator.push(context,
-                                MaterialPageRoute(builder: (context) => BackendCaseDetailsPage(summaryData: item)))
-                            .then((_) => _loadDashboardData());
-                      } else if (wf.contains("avo") || wf.contains("inspection")) {
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => InspectionFormPage(summaryData: item)))
-                            .then((_) => _loadDashboardData());
-                      } else {
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => VehicleDetailsPage(summaryData: item)))
-                            .then((_) => _loadDashboardData());
-                      }
-                    },
+                    onPressed: () => navigateToCase(context, item, _loadDashboardData),
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(color: Colors.deepPurple.shade200),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -341,7 +371,7 @@ class _AvoDashboardState extends State<AvoDashboard> {
                     ),
                     child: const Text("ENTER", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                   ),
-                )
+                ),
               ],
             )
           ],
@@ -399,7 +429,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   String? _selectedAssignee;
   final List<String> _assigneeOptions = [
     "SHEKHAR — +919885255567",
-    "FinalReport — +9199885855567"
+    "FinalReport — +919885855567"
   ];
 
   final List<String> _stakeholderList = [
@@ -524,6 +554,107 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   final _radiatorController = TextEditingController();
   final _intercoolerController = TextEditingController();
   final _allHosePipesController = TextEditingController();
+
+  // Additional fields from Excel spec
+  final _speedoMeterController = TextEditingController();
+  final _frontAxlesController = TextEditingController();
+  final _rearAxlesController = TextEditingController();
+  final _driveShaftsController = TextEditingController();
+  final _steeringHandleController = TextEditingController();
+  final _frontForkAssyController = TextEditingController();
+  final _frontFairingController = TextEditingController();
+  final _rearCowlsController = TextEditingController();
+  final _bumpersController = TextEditingController();
+  final _doorsController = TextEditingController();
+  final _fendersController = TextEditingController();
+  final _rightSideWingController = TextEditingController();
+  final _leftSideWingController = TextEditingController();
+  final _tailGateController = TextEditingController();
+  final _loadFloorController = TextEditingController();
+
+  // Brakes Additional
+  final _parkingBrakeController = TextEditingController();
+  final _absController = TextEditingController();
+
+  // Electrical Additional
+  final _tailLightsIndicatorsController = TextEditingController();
+  final _wiringAssyController = TextEditingController();
+
+  // Crash Guards
+  final _frontCrashGuardController = TextEditingController();
+  final _rearCrashGuardController = TextEditingController();
+
+  // 4W Specific
+  final _airBagsController = TextEditingController();
+  final _sunRoofController = TextEditingController();
+  final _sideFendersController = TextEditingController();
+
+  // CV Specific
+  final _hydraulicLiftController = TextEditingController();
+  final _sideUnderRunProtectionController = TextEditingController();
+
+  // 2W Specific
+  final _mainStandController = TextEditingController();
+  final _sideStandController = TextEditingController();
+  final _frontMudGuardController = TextEditingController();
+  final _rearMudGuardController = TextEditingController();
+  final _fuelTankConditionController = TextEditingController();
+  final _chainSprocketController = TextEditingController();
+  final _frontBrakeConditionController = TextEditingController();
+  final _rearBrakeConditionController = TextEditingController();
+  final _headLightController = TextEditingController();
+  final _tailLightController = TextEditingController();
+  final _indicatorsController = TextEditingController();
+  final _hornConditionController = TextEditingController();
+  final _mirrorConditionController = TextEditingController();
+  final _seatConditionController = TextEditingController();
+  final _handleBarGripsController = TextEditingController();
+  final _footRestController = TextEditingController();
+  final _alloyWheelRimController = TextEditingController();
+
+  // CE Specific
+  final _retarderController = TextEditingController();
+  final _differentialLockController = TextEditingController();
+  final _ptoController = TextEditingController();
+  final _hydraulicSystemController = TextEditingController();
+  final _boomArmController = TextEditingController();
+  final _bucketConditionController = TextEditingController();
+  final _bladeConditionController = TextEditingController();
+  final _liftingCapacityController = TextEditingController();
+  final _tyreConditionCeController = TextEditingController();
+  final _underCarriageController = TextEditingController();
+  final _crawlerTracksController = TextEditingController();
+  final _steelRimsController = TextEditingController();
+  final _attachmentConditionController = TextEditingController();
+  final _cabConditionController = TextEditingController();
+  final _counterWeightController = TextEditingController();
+  final _rockBreakerController = TextEditingController();
+
+  // BUS Specific
+  final _coachConditionController = TextEditingController();
+  final _passengerSeatsController = TextEditingController();
+  final _emergencyExitsController = TextEditingController();
+  final _luggageCompartmentController = TextEditingController();
+  final _acSystemController = TextEditingController();
+  final _destinationBoardController = TextEditingController();
+  final _sideMirrorsController = TextEditingController();
+
+  // FE Specific
+  final _rightIndividualBrakesController = TextEditingController();
+  final _leftIndividualBrakesController = TextEditingController();
+  final _threePointLinkageController = TextEditingController();
+  final _powerTakeOffController = TextEditingController();
+  final _hitchSystemController = TextEditingController();
+  final _hydraulicLiftFeController = TextEditingController();
+  final _frontWeightsController = TextEditingController();
+  final _rearWeightsController = TextEditingController();
+  final _ropsCanopyController = TextEditingController();
+  final _frontTyreConditionController = TextEditingController();
+  final _rearTyreConditionController = TextEditingController();
+  final _implementAttachmentsController = TextEditingController();
+  final _fuelTankFeController = TextEditingController();
+  final _frontAxleFeController = TextEditingController();
+  final _rearDrawbarController = TextEditingController();
 
   final _remarksController = TextEditingController();
   final _noteController = TextEditingController();
@@ -710,20 +841,15 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
 
   Future<void> _fetchLocationsForPincode(String val) async {
     try {
-      final url = Uri.parse(
-          "https://prontobackend-bhdnbec2fvd3ecfk.eastus2-01.azurewebsites.net/api/Pincodes/$val");
-      final response = await http.get(url);
-      if (response.statusCode == 200) {
-        List<dynamic> data = jsonDecode(response.body);
-        if (data.isNotEmpty && mounted) {
-          setState(() {
-            _pincodeLocations = data;
-            _locationNames = data.map((e) => e['name'].toString()).toSet().toList();
-            if (_selectedLocationName != null && !_locationNames.contains(_selectedLocationName)) {
-              _selectedLocationName = null;
-            }
-          });
-        }
+      final data = await api.lookupPincode(val);
+      if (data.isNotEmpty && mounted) {
+        setState(() {
+          _pincodeLocations = data;
+          _locationNames = data.map((e) => e['name'].toString()).toSet().toList();
+          if (_selectedLocationName != null && !_locationNames.contains(_selectedLocationName)) {
+            _selectedLocationName = null;
+          }
+        });
       }
     } catch (e) {}
   }
@@ -855,6 +981,107 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     _radiatorController.text = _getUniversalValue(data, ['radiator']);
     _intercoolerController.text = _getUniversalValue(data, ['intercooler', 'interCooler']);
     _allHosePipesController.text = _getUniversalValue(data, ['allHosePipes']);
+
+    // Additional existing fields (already in backend model)
+    _speedoMeterController.text = _getUniversalValue(data, ['speedoMeter', 'SpeedoMeter']);
+    _frontAxlesController.text = _getUniversalValue(data, ['frontAxles', 'FrontAxles']);
+    _rearAxlesController.text = _getUniversalValue(data, ['rearAxles', 'RearAxles']);
+    _driveShaftsController.text = _getUniversalValue(data, ['driveShafts', 'DriveShafts']);
+    _steeringHandleController.text = _getUniversalValue(data, ['steeringHandle', 'SteeringHandle']);
+    _frontForkAssyController.text = _getUniversalValue(data, ['frontForkAssy', 'FrontForkAssy']);
+    _frontFairingController.text = _getUniversalValue(data, ['frontFairing', 'FrontFairing']);
+    _rearCowlsController.text = _getUniversalValue(data, ['rearCowls', 'RearCowls']);
+    _bumpersController.text = _getUniversalValue(data, ['bumpers', 'Bumpers']);
+    _doorsController.text = _getUniversalValue(data, ['doors', 'Doors']);
+    _fendersController.text = _getUniversalValue(data, ['fenders', 'Fenders']);
+    _rightSideWingController.text = _getUniversalValue(data, ['rightSideWing', 'RightSideWing']);
+    _leftSideWingController.text = _getUniversalValue(data, ['leftSideWing', 'LeftSideWing']);
+    _tailGateController.text = _getUniversalValue(data, ['tailGate', 'TailGate']);
+    _loadFloorController.text = _getUniversalValue(data, ['loadFloor', 'LoadFloor']);
+
+    // Brakes Additional
+    _parkingBrakeController.text = _getUniversalValue(data, ['parkingBrake', 'ParkingBrake']);
+    _absController.text = _getUniversalValue(data, ['abs', 'Abs']);
+
+    // Electrical Additional
+    _tailLightsIndicatorsController.text = _getUniversalValue(data, ['tailLightsIndicators', 'TailLightsIndicators']);
+    _wiringAssyController.text = _getUniversalValue(data, ['wiringAssy', 'WiringAssy']);
+
+    // Crash Guards
+    _frontCrashGuardController.text = _getUniversalValue(data, ['frontCrashGuard', 'FrontCrashGuard']);
+    _rearCrashGuardController.text = _getUniversalValue(data, ['rearCrashGuard', 'RearCrashGuard']);
+
+    // 4W Specific
+    _airBagsController.text = _getUniversalValue(data, ['airBags', 'AirBags']);
+    _sunRoofController.text = _getUniversalValue(data, ['sunRoof', 'SunRoof']);
+    _sideFendersController.text = _getUniversalValue(data, ['sideFenders', 'SideFenders']);
+
+    // CV Specific
+    _hydraulicLiftController.text = _getUniversalValue(data, ['hydraulicLift', 'HydraulicLift']);
+    _sideUnderRunProtectionController.text = _getUniversalValue(data, ['sideUnderRunProtection', 'SideUnderRunProtection']);
+
+    // 2W Specific
+    _mainStandController.text = _getUniversalValue(data, ['mainStand', 'MainStand']);
+    _sideStandController.text = _getUniversalValue(data, ['sideStand', 'SideStand']);
+    _frontMudGuardController.text = _getUniversalValue(data, ['frontMudGuard', 'FrontMudGuard']);
+    _rearMudGuardController.text = _getUniversalValue(data, ['rearMudGuard', 'RearMudGuard']);
+    _fuelTankConditionController.text = _getUniversalValue(data, ['fuelTankCondition', 'FuelTankCondition']);
+    _chainSprocketController.text = _getUniversalValue(data, ['chainSprocket', 'ChainSprocket']);
+    _frontBrakeConditionController.text = _getUniversalValue(data, ['frontBrakeCondition', 'FrontBrakeCondition']);
+    _rearBrakeConditionController.text = _getUniversalValue(data, ['rearBrakeCondition', 'RearBrakeCondition']);
+    _headLightController.text = _getUniversalValue(data, ['headLight', 'HeadLight']);
+    _tailLightController.text = _getUniversalValue(data, ['tailLight', 'TailLight']);
+    _indicatorsController.text = _getUniversalValue(data, ['indicators', 'Indicators']);
+    _hornConditionController.text = _getUniversalValue(data, ['hornCondition', 'HornCondition']);
+    _mirrorConditionController.text = _getUniversalValue(data, ['mirrorCondition', 'MirrorCondition']);
+    _seatConditionController.text = _getUniversalValue(data, ['seatCondition', 'SeatCondition']);
+    _handleBarGripsController.text = _getUniversalValue(data, ['handleBarGrips', 'HandleBarGrips']);
+    _footRestController.text = _getUniversalValue(data, ['footRest', 'FootRest']);
+    _alloyWheelRimController.text = _getUniversalValue(data, ['alloyWheelRim', 'AlloyWheelRim']);
+
+    // CE Specific
+    _retarderController.text = _getUniversalValue(data, ['retarder', 'Retarder']);
+    _differentialLockController.text = _getUniversalValue(data, ['differentialLock', 'DifferentialLock']);
+    _ptoController.text = _getUniversalValue(data, ['pto', 'Pto']);
+    _hydraulicSystemController.text = _getUniversalValue(data, ['hydraulicSystem', 'HydraulicSystem']);
+    _boomArmController.text = _getUniversalValue(data, ['boomArm', 'BoomArm']);
+    _bucketConditionController.text = _getUniversalValue(data, ['bucketCondition', 'BucketCondition']);
+    _bladeConditionController.text = _getUniversalValue(data, ['bladeCondition', 'BladeCondition']);
+    _liftingCapacityController.text = _getUniversalValue(data, ['liftingCapacity', 'LiftingCapacity']);
+    _tyreConditionCeController.text = _getUniversalValue(data, ['tyreConditionCe', 'TyreConditionCe']);
+    _underCarriageController.text = _getUniversalValue(data, ['underCarriage', 'UnderCarriage']);
+    _crawlerTracksController.text = _getUniversalValue(data, ['crawlerTracks', 'CrawlerTracks']);
+    _steelRimsController.text = _getUniversalValue(data, ['steelRims', 'SteelRims']);
+    _attachmentConditionController.text = _getUniversalValue(data, ['attachmentCondition', 'AttachmentCondition']);
+    _cabConditionController.text = _getUniversalValue(data, ['cabCondition', 'CabCondition']);
+    _counterWeightController.text = _getUniversalValue(data, ['counterWeight', 'CounterWeight']);
+    _rockBreakerController.text = _getUniversalValue(data, ['rockBreaker', 'RockBreaker']);
+
+    // BUS Specific
+    _coachConditionController.text = _getUniversalValue(data, ['coachCondition', 'CoachCondition']);
+    _passengerSeatsController.text = _getUniversalValue(data, ['passengerSeats', 'PassengerSeats']);
+    _emergencyExitsController.text = _getUniversalValue(data, ['emergencyExits', 'EmergencyExits']);
+    _luggageCompartmentController.text = _getUniversalValue(data, ['luggageCompartment', 'LuggageCompartment']);
+    _acSystemController.text = _getUniversalValue(data, ['acSystem', 'AcSystem']);
+    _destinationBoardController.text = _getUniversalValue(data, ['destinationBoard', 'DestinationBoard']);
+    _sideMirrorsController.text = _getUniversalValue(data, ['sideMirrors', 'SideMirrors']);
+
+    // FE Specific
+    _rightIndividualBrakesController.text = _getUniversalValue(data, ['rightIndividualBrakes', 'RightIndividualBrakes']);
+    _leftIndividualBrakesController.text = _getUniversalValue(data, ['leftIndividualBrakes', 'LeftIndividualBrakes']);
+    _threePointLinkageController.text = _getUniversalValue(data, ['threePointLinkage', 'ThreePointLinkage']);
+    _powerTakeOffController.text = _getUniversalValue(data, ['powerTakeOff', 'PowerTakeOff']);
+    _hitchSystemController.text = _getUniversalValue(data, ['hitchSystem', 'HitchSystem']);
+    _hydraulicLiftFeController.text = _getUniversalValue(data, ['hydraulicLiftFe', 'HydraulicLiftFe']);
+    _frontWeightsController.text = _getUniversalValue(data, ['frontWeights', 'FrontWeights']);
+    _rearWeightsController.text = _getUniversalValue(data, ['rearWeights', 'RearWeights']);
+    _ropsCanopyController.text = _getUniversalValue(data, ['ropsCanopy', 'RopsCanopy']);
+    _frontTyreConditionController.text = _getUniversalValue(data, ['frontTyreCondition', 'FrontTyreCondition']);
+    _rearTyreConditionController.text = _getUniversalValue(data, ['rearTyreCondition', 'RearTyreCondition']);
+    _implementAttachmentsController.text = _getUniversalValue(data, ['implementAttachments', 'ImplementAttachments']);
+    _fuelTankFeController.text = _getUniversalValue(data, ['fuelTankFe', 'FuelTankFe']);
+    _frontAxleFeController.text = _getUniversalValue(data, ['frontAxleFe', 'FrontAxleFe']);
+    _rearDrawbarController.text = _getUniversalValue(data, ['rearDrawbar', 'RearDrawbar']);
 
     _remarksController.text = _getUniversalValue(data, ['remarks']);
   }
@@ -1072,6 +1299,97 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       "gearboxAssembly": _gearboxAssemblyController.text,
       "propellerShaft": _propellerShaftController.text,
       "differentialAssy": _differentialAssyController.text,
+      // Additional existing fields
+      "speedoMeter": _speedoMeterController.text,
+      "frontAxles": _frontAxlesController.text,
+      "rearAxles": _rearAxlesController.text,
+      "driveShafts": _driveShaftsController.text,
+      "steeringHandle": _steeringHandleController.text,
+      "frontForkAssy": _frontForkAssyController.text,
+      "frontFairing": _frontFairingController.text,
+      "rearCowls": _rearCowlsController.text,
+      "bumpers": _bumpersController.text,
+      "doors": _doorsController.text,
+      "fenders": _fendersController.text,
+      "rightSideWing": _rightSideWingController.text,
+      "leftSideWing": _leftSideWingController.text,
+      "tailGate": _tailGateController.text,
+      "loadFloor": _loadFloorController.text,
+      // Brakes Additional
+      "parkingBrake": _parkingBrakeController.text,
+      "abs": _absController.text,
+      // Electrical Additional
+      "tailLightsIndicators": _tailLightsIndicatorsController.text,
+      "wiringAssy": _wiringAssyController.text,
+      // Crash Guards
+      "frontCrashGuard": _frontCrashGuardController.text,
+      "rearCrashGuard": _rearCrashGuardController.text,
+      // 4W Specific
+      "airBags": _airBagsController.text,
+      "sunRoof": _sunRoofController.text,
+      "sideFenders": _sideFendersController.text,
+      // CV Specific
+      "hydraulicLift": _hydraulicLiftController.text,
+      "sideUnderRunProtection": _sideUnderRunProtectionController.text,
+      // 2W Specific
+      "mainStand": _mainStandController.text,
+      "sideStand": _sideStandController.text,
+      "frontMudGuard": _frontMudGuardController.text,
+      "rearMudGuard": _rearMudGuardController.text,
+      "fuelTankCondition": _fuelTankConditionController.text,
+      "chainSprocket": _chainSprocketController.text,
+      "frontBrakeCondition": _frontBrakeConditionController.text,
+      "rearBrakeCondition": _rearBrakeConditionController.text,
+      "headLight": _headLightController.text,
+      "tailLight": _tailLightController.text,
+      "indicators": _indicatorsController.text,
+      "hornCondition": _hornConditionController.text,
+      "mirrorCondition": _mirrorConditionController.text,
+      "seatCondition": _seatConditionController.text,
+      "handleBarGrips": _handleBarGripsController.text,
+      "footRest": _footRestController.text,
+      "alloyWheelRim": _alloyWheelRimController.text,
+      // CE Specific
+      "retarder": _retarderController.text,
+      "differentialLock": _differentialLockController.text,
+      "pto": _ptoController.text,
+      "hydraulicSystem": _hydraulicSystemController.text,
+      "boomArm": _boomArmController.text,
+      "bucketCondition": _bucketConditionController.text,
+      "bladeCondition": _bladeConditionController.text,
+      "liftingCapacity": _liftingCapacityController.text,
+      "tyreConditionCe": _tyreConditionCeController.text,
+      "underCarriage": _underCarriageController.text,
+      "crawlerTracks": _crawlerTracksController.text,
+      "steelRims": _steelRimsController.text,
+      "attachmentCondition": _attachmentConditionController.text,
+      "cabCondition": _cabConditionController.text,
+      "counterWeight": _counterWeightController.text,
+      "rockBreaker": _rockBreakerController.text,
+      // BUS Specific
+      "coachCondition": _coachConditionController.text,
+      "passengerSeats": _passengerSeatsController.text,
+      "emergencyExits": _emergencyExitsController.text,
+      "luggageCompartment": _luggageCompartmentController.text,
+      "acSystem": _acSystemController.text,
+      "destinationBoard": _destinationBoardController.text,
+      "sideMirrors": _sideMirrorsController.text,
+      // FE Specific
+      "rightIndividualBrakes": _rightIndividualBrakesController.text,
+      "leftIndividualBrakes": _leftIndividualBrakesController.text,
+      "threePointLinkage": _threePointLinkageController.text,
+      "powerTakeOff": _powerTakeOffController.text,
+      "hitchSystem": _hitchSystemController.text,
+      "hydraulicLiftFe": _hydraulicLiftFeController.text,
+      "frontWeights": _frontWeightsController.text,
+      "rearWeights": _rearWeightsController.text,
+      "ropsCanopy": _ropsCanopyController.text,
+      "frontTyreCondition": _frontTyreConditionController.text,
+      "rearTyreCondition": _rearTyreConditionController.text,
+      "implementAttachments": _implementAttachmentsController.text,
+      "fuelTankFe": _fuelTankFeController.text,
+      "frontAxleFe": _frontAxleFeController.text,
+      "rearDrawbar": _rearDrawbarController.text,
       // Remarks
       "remarks": _remarksController.text,
     };
@@ -1136,14 +1454,14 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     final startRes = await api.startWorkflow(ctx["id"]!, 3, ctx["vNo"]!, ctx["contact"]!);
     if (!mounted) return;
     if (startRes['success'] != true) {
-      print("DEBUG: startWorkflow(3) on save failed (likely already started): ${startRes['message']}");
+      debugPrint("DEBUG: startWorkflow(3) on save failed (likely already started): ${startRes['message']}");
     }
 
     final tableRes = await api.updateWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
         {"workflow": "AVO", "workflowStepOrder": 3, "assignedTo": assignee, "avoAssignedTo": assignee});
     if (!mounted) return;
     if (tableRes['success'] != true) {
-      print("DEBUG: updateWorkflowTable on save failed: ${tableRes['message']}");
+      debugPrint("DEBUG: updateWorkflowTable on save failed: ${tableRes['message']}");
     }
 
     await _loadAllData();
@@ -1168,7 +1486,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     if (!mounted) return;
 
     if (photoCheck['endpointMissing'] == true) {
-      print("WARN: checkMandatoryPhotos endpoint missing — skipping photo gating");
+      debugPrint("WARN: checkMandatoryPhotos endpoint missing — skipping photo gating");
     } else if (photoCheck['isComplete'] != true) {
       setState(() => _isSubmitting = false);
       final missing = (photoCheck['missingPhotos'] as List?)?.cast<String>() ?? [];
@@ -1214,19 +1532,20 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       return;
     }
 
+    // AI valuation is best-effort — a failure should not block submission.
+    // If the GPT call times out or the backend errors, we log a warning and
+    // continue; the QC user can still manually enter valuation figures.
     final aiRes = await api.getValuationDetailsfromAI(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
     if (!mounted) return;
     if (aiRes['success'] != true) {
-      setState(() => _isSubmitting = false);
-      _showError("Submit failed at AI step: ${aiRes['message']}");
-      return;
+      debugPrint("WARN: AI valuation step failed (non-blocking): ${aiRes['message']}");
     }
 
     final tableRes = await api.updateWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
         {"workflow": "QC", "workflowStepOrder": 4, "assignedTo": assignee, "avoAssignedTo": assignee});
     if (!mounted) return;
     if (tableRes['success'] != true) {
-      print("WARN: updateWorkflowTable failed after Submit: ${tableRes['message']}");
+      debugPrint("WARN: updateWorkflowTable failed after Submit: ${tableRes['message']}");
     }
 
     setState(() => _isSubmitting = false);
@@ -1401,7 +1720,11 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
             onPressed: () {
               Navigator.pop(ctx);
               Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => VehicleMediaPage(valuationId: widget.summaryData['valuationId'] ?? "", cameraOnly: true)));
+                  MaterialPageRoute(builder: (_) => VehicleMediaPage(
+                      valuationId: widget.summaryData['valuationId'] ?? "",
+                      cameraOnly: true,
+                      vehicleNumber: widget.summaryData['vehicleNumber']?.toString(),
+                      applicantContact: widget.summaryData['applicantContact']?.toString())));
             },
             child: const Text("Upload photos"),
           ),
@@ -2111,9 +2434,9 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
                 decoration: const InputDecoration(border: OutlineInputBorder(), hintText: "Remarks..."))
           ]),
           _buildSectionContainer("Documents", [
-            _buildDocButton("RC", _rcPath, () => _pickFile('RC'), canEdit),
-            _buildDocButton("Insurance", _insPath, () => _pickFile('INS'), canEdit),
-            _buildDocButton("Other", _otherPath, () => _pickFile('OTHER'), canEdit),
+            _buildDocButton("RC", _rcPath, () => _pickFile('RC'), canEdit, type: 'RC'),
+            _buildDocButton("Insurance", _insPath, () => _pickFile('INS'), canEdit, type: 'INS'),
+            _buildDocButton("Other", _otherPath, () => _pickFile('OTHER'), canEdit, type: 'OTHER'),
           ]),
           _buildSectionContainer("Assign", [
             if (canEdit)
@@ -2216,6 +2539,111 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
           tf("All Hose & Pipes", "allHosePipes", _allHosePipesController),
         ]),
 
+        _buildSectionContainer("Body & Structure", [
+          tf("Speedometer", "speedoMeter", _speedoMeterController),
+          tf("Drive Shafts", "driveShafts", _driveShaftsController),
+          tf("Steering Handle", "steeringHandle", _steeringHandleController),
+          tf("Front Fork Assembly", "frontForkAssy", _frontForkAssyController),
+          tf("Front Fairing", "frontFairing", _frontFairingController),
+          tf("Rear Cowls", "rearCowls", _rearCowlsController),
+          tf("Bumpers", "bumpers", _bumpersController),
+          tf("Doors", "doors", _doorsController),
+          tf("Fenders", "fenders", _fendersController),
+          tf("Right Side Wing", "rightSideWing", _rightSideWingController),
+          tf("Left Side Wing", "leftSideWing", _leftSideWingController),
+          tf("Tail Gate", "tailGate", _tailGateController),
+          tf("Load Floor", "loadFloor", _loadFloorController),
+          tf("Front Axles", "frontAxles", _frontAxlesController),
+          tf("Rear Axles", "rearAxles", _rearAxlesController),
+        ]),
+
+        _buildSectionContainer("Brakes, Electrical & Crash Guards", [
+          tf("Parking Brake", "parkingBrake", _parkingBrakeController),
+          tf("ABS", "abs", _absController),
+          tf("Tail Lights / Indicators", "tailLightsIndicators", _tailLightsIndicatorsController),
+          tf("Wiring Assembly", "wiringAssy", _wiringAssyController),
+          tf("Front Crash Guard", "frontCrashGuard", _frontCrashGuardController),
+          tf("Rear Crash Guard", "rearCrashGuard", _rearCrashGuardController),
+        ]),
+
+        _buildSectionContainer("4W Specific", [
+          tf("Air Bags", "airBags", _airBagsController),
+          tf("Sun Roof", "sunRoof", _sunRoofController),
+          tf("Side Fenders", "sideFenders", _sideFendersController),
+        ]),
+
+        _buildSectionContainer("CV Specific", [
+          tf("Hydraulic Lift", "hydraulicLift", _hydraulicLiftController),
+          tf("Side Under-Run Protection", "sideUnderRunProtection", _sideUnderRunProtectionController),
+        ]),
+
+        _buildSectionContainer("2W Specific", [
+          tf("Main Stand", "mainStand", _mainStandController),
+          tf("Side Stand", "sideStand", _sideStandController),
+          tf("Front Mud Guard", "frontMudGuard", _frontMudGuardController),
+          tf("Rear Mud Guard", "rearMudGuard", _rearMudGuardController),
+          tf("Fuel Tank Condition", "fuelTankCondition", _fuelTankConditionController),
+          tf("Chain & Sprocket", "chainSprocket", _chainSprocketController),
+          tf("Front Brake Condition", "frontBrakeCondition", _frontBrakeConditionController),
+          tf("Rear Brake Condition", "rearBrakeCondition", _rearBrakeConditionController),
+          tf("Head Light", "headLight", _headLightController),
+          tf("Tail Light", "tailLight", _tailLightController),
+          tf("Indicators", "indicators", _indicatorsController),
+          tf("Horn Condition", "hornCondition", _hornConditionController),
+          tf("Mirror Condition", "mirrorCondition", _mirrorConditionController),
+          tf("Seat Condition", "seatCondition", _seatConditionController),
+          tf("Handle Bar Grips", "handleBarGrips", _handleBarGripsController),
+          tf("Foot Rest", "footRest", _footRestController),
+          tf("Alloy Wheel / Rim", "alloyWheelRim", _alloyWheelRimController),
+        ]),
+
+        _buildSectionContainer("CE / Construction Equipment Specific", [
+          tf("Retarder", "retarder", _retarderController),
+          tf("Differential Lock", "differentialLock", _differentialLockController),
+          tf("PTO", "pto", _ptoController),
+          tf("Hydraulic System", "hydraulicSystem", _hydraulicSystemController),
+          tf("Boom / Arm", "boomArm", _boomArmController),
+          tf("Bucket Condition", "bucketCondition", _bucketConditionController),
+          tf("Blade Condition", "bladeCondition", _bladeConditionController),
+          tf("Lifting Capacity", "liftingCapacity", _liftingCapacityController),
+          tf("Tyre Condition (CE)", "tyreConditionCe", _tyreConditionCeController),
+          tf("Under Carriage", "underCarriage", _underCarriageController),
+          tf("Crawler Tracks", "crawlerTracks", _crawlerTracksController),
+          tf("Steel Rims", "steelRims", _steelRimsController),
+          tf("Attachment Condition", "attachmentCondition", _attachmentConditionController),
+          tf("Cab Condition", "cabCondition", _cabConditionController),
+          tf("Counter Weight", "counterWeight", _counterWeightController),
+          tf("Rock Breaker", "rockBreaker", _rockBreakerController),
+        ]),
+
+        _buildSectionContainer("BUS Specific", [
+          tf("Coach Condition", "coachCondition", _coachConditionController),
+          tf("Passenger Seats", "passengerSeats", _passengerSeatsController),
+          tf("Emergency Exits", "emergencyExits", _emergencyExitsController),
+          tf("Luggage Compartment", "luggageCompartment", _luggageCompartmentController),
+          tf("AC System", "acSystem", _acSystemController),
+          tf("Destination Board", "destinationBoard", _destinationBoardController),
+          tf("Side Mirrors", "sideMirrors", _sideMirrorsController),
+        ]),
+
+        _buildSectionContainer("FE / Farm Equipment Specific", [
+          tf("Right Individual Brakes", "rightIndividualBrakes", _rightIndividualBrakesController),
+          tf("Left Individual Brakes", "leftIndividualBrakes", _leftIndividualBrakesController),
+          tf("Three Point Linkage", "threePointLinkage", _threePointLinkageController),
+          tf("Power Take Off", "powerTakeOff", _powerTakeOffController),
+          tf("Hitch System", "hitchSystem", _hitchSystemController),
+          tf("Hydraulic Lift (FE)", "hydraulicLiftFe", _hydraulicLiftFeController),
+          tf("Front Weights", "frontWeights", _frontWeightsController),
+          tf("Rear Weights", "rearWeights", _rearWeightsController),
+          tf("ROPS / Canopy", "ropsCanopy", _ropsCanopyController),
+          tf("Front Tyre Condition", "frontTyreCondition", _frontTyreConditionController),
+          tf("Rear Tyre Condition", "rearTyreCondition", _rearTyreConditionController),
+          tf("Implement Attachments", "implementAttachments", _implementAttachmentsController),
+          tf("Fuel Tank (FE)", "fuelTankFe", _fuelTankFeController),
+          tf("Front Axle (FE)", "frontAxleFe", _frontAxleFeController),
+          tf("Rear Drawbar", "rearDrawbar", _rearDrawbarController),
+        ]),
+
         _buildSectionContainer("Payment Collection", [
           if (canEdit)
             _buildDropdown("Payment Status", _paymentStatuses, _selectedPaymentStatus,
@@ -2277,8 +2705,8 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
             child: _buildField(label, controller.text, controller, isEditable: isEditable, isRequired: required)));
   }
 
-  Widget _buildDocButton(String label, String? path, VoidCallback onTap, bool canEdit) {
-    return _buildViewDocRow(label, null, 'RC', canEdit);
+  Widget _buildDocButton(String label, String? path, VoidCallback onTap, bool canEdit, {String type = 'RC'}) {
+    return _buildViewDocRow(label, path, type, canEdit);
   }
 
   Widget _buildHeaderCard() {
@@ -2311,21 +2739,46 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
               const SizedBox(width: 8),
               _buildHeaderTabChip("AVO", _currentTab == "AVO"),
               const SizedBox(width: 8),
-              _buildHeaderTabChip("QC", false, onTap: () {
-                Navigator.push(context, MaterialPageRoute(
-                    builder: (_) => QcDetailPage(summaryData: widget.summaryData)));
-              }),
+              _buildHeaderTabChip("QC", false,
+                locked: currentUserRoleLevel < 4,
+                onTap: currentUserRoleLevel >= 4 ? () {
+                  Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => QcDetailPage(summaryData: widget.summaryData)));
+                } : null,
+              ),
               const SizedBox(width: 8),
-              _buildHeaderTabChip("Final Report", false, onTap: () {
-                Navigator.push(context, MaterialPageRoute(
-                    builder: (_) => FinalReportDetailPage(summaryData: widget.summaryData)));
-              }),
+              _buildHeaderTabChip("Final Report", false,
+                locked: currentUserRoleLevel < 5,
+                onTap: currentUserRoleLevel >= 5 ? () {
+                  Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => FinalReportDetailPage(summaryData: widget.summaryData)));
+                } : null,
+              ),
             ]),
           )
         ]));
   }
 
-  Widget _buildHeaderTabChip(String label, bool active, {VoidCallback? onTap}) {
+  Widget _buildHeaderTabChip(String label, bool active,
+      {VoidCallback? onTap, bool locked = false}) {
+    if (locked) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+            color: Colors.grey[100],
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.grey.shade300)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.lock_outline, size: 12, color: Colors.grey[400]),
+          const SizedBox(width: 4),
+          Text(label,
+              style: TextStyle(
+                  color: Colors.grey[400],
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500)),
+        ]),
+      );
+    }
     return InkWell(
         onTap: onTap ?? () {
           setState(() {
@@ -2348,7 +2801,11 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
         margin: const EdgeInsets.symmetric(vertical: 20),
         child: ElevatedButton(
             onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (context) => VehicleMediaPage(valuationId: widget.summaryData['valuationId'] ?? "", cameraOnly: true))),
+                MaterialPageRoute(builder: (_) => VehicleMediaPage(
+                    valuationId: widget.summaryData['valuationId'] ?? "",
+                    cameraOnly: true,
+                    vehicleNumber: widget.summaryData['vehicleNumber']?.toString(),
+                    applicantContact: widget.summaryData['applicantContact']?.toString()))),
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF3F51B5), foregroundColor: Colors.white),
             child: const Text("View / Upload Images")));
   }

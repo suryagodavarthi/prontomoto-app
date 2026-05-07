@@ -13,6 +13,75 @@ import 'qc_dashboard.dart';
 import 'finalreport_dashboard.dart';
 import 'firebase_options.dart';
 
+// ── Role-Based Access Control ─────────────────────────────────────────────────
+// Set once at login; read by all dashboards and case-detail pages.
+String currentUserRole = '';
+int currentUserRoleLevel = 1; // 1=Stakeholder 2=Backend 3=AVO 4=QC 5=FinalReport
+
+int roleLevelOf(String roleId) {
+  final r = roleId.toLowerCase();
+  switch (r) {
+    case 'cancreatestakeholder':
+    case 'stakeholder':
+      return 1;
+    case 'backend':
+      return 2;
+    case 'avo':
+    case 'valuer':
+      return 3;
+    case 'caneditqualitycontrol':
+    case 'qc':
+      return 4;
+    case 'finalreport':
+    case 'admin':
+    case 'superadmin':
+    case 'stateadmin':
+      return 5;
+    default:
+      // Fuzzy fallback — handles variations like "QualityControl", "AvoUser", etc.
+      if (r.contains('final') || r.contains('admin')) return 5;
+      if (r.contains('quality') || r.contains('qc')) return 4;
+      if (r.contains('avo') || r.contains('valuer') || r.contains('inspection')) return 3;
+      if (r.contains('backend')) return 2;
+      return 1;
+  }
+}
+
+int workflowLevelOf(String workflow) {
+  final wf = workflow.toLowerCase();
+  if (wf.contains('stakeholder')) return 1;
+  if (wf.contains('backend')) return 2;
+  if (wf.contains('avo') || wf.contains('inspection')) return 3;
+  if (wf.contains('qc') || wf.contains('quality')) return 4;
+  return 5; // final report or unknown
+}
+
+/// Navigate to a case capped at the current user's max accessible stage.
+/// e.g. AVO user (level 3) opening a FinalReport case (level 5) → opens at AVO view.
+void navigateToCase(
+    BuildContext context, Map<String, dynamic> item, VoidCallback onReturn) {
+  final int caseLevel = workflowLevelOf(item['workflow'] ?? '');
+  final int effectiveLevel = caseLevel.clamp(1, currentUserRoleLevel);
+
+  if (effectiveLevel >= 5) {
+    Navigator.push(context,
+        MaterialPageRoute(builder: (_) => FinalReportDetailPage(summaryData: item))).then((_) => onReturn());
+  } else if (effectiveLevel >= 4) {
+    Navigator.push(context,
+        MaterialPageRoute(builder: (_) => QcDetailPage(summaryData: item))).then((_) => onReturn());
+  } else if (effectiveLevel >= 3) {
+    Navigator.push(context,
+        MaterialPageRoute(builder: (_) => InspectionFormPage(summaryData: item))).then((_) => onReturn());
+  } else if (effectiveLevel >= 2) {
+    Navigator.push(context,
+        MaterialPageRoute(builder: (_) => BackendCaseDetailsPage(summaryData: item))).then((_) => onReturn());
+  } else {
+    Navigator.push(context,
+        MaterialPageRoute(builder: (_) => VehicleDetailsPage(summaryData: item))).then((_) => onReturn());
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
@@ -20,7 +89,7 @@ void main() async {
       options: DefaultFirebaseOptions.currentPlatform,
     );
   } catch (e) {
-    print("Firebase Warning: $e");
+    debugPrint("Firebase Warning: $e");
   }
   runApp(const ProntoMotoApp());
 }
@@ -156,20 +225,25 @@ class _LoginPageState extends State<LoginPage> {
 
       if (!mounted) return;
 
-      if (roleId == 'avo' || roleId == 'valuer') {
+      // Set global role level used for access control across all pages
+      currentUserRole = roleId;
+      currentUserRoleLevel = roleLevelOf(roleId);
+
+      // Route by computed level — inherits fuzzy matching from roleLevelOf.
+      // backend/superadmin/stateadmin are kept on BackendDashboard even at level 5.
+      if (roleId == 'backend' || roleId == 'superadmin' || roleId == 'stateadmin') {
         Navigator.pushReplacement(context,
-            MaterialPageRoute(builder: (context) => AvoDashboard(userName: name)));
-      } else if (roleId == 'qc') {
+            MaterialPageRoute(builder: (context) => BackendDashboard(userName: name)));
+      } else if (currentUserRoleLevel >= 5) {
+        Navigator.pushReplacement(context,
+            MaterialPageRoute(builder: (context) => FinalReportDashboard(userName: name)));
+      } else if (currentUserRoleLevel >= 4) {
         Navigator.pushReplacement(context,
             MaterialPageRoute(builder: (context) => QcDashboard(userName: name)));
-      } else if (roleId == 'finalreport') {
+      } else if (currentUserRoleLevel >= 3) {
         Navigator.pushReplacement(context,
-            MaterialPageRoute(
-                builder: (context) => FinalReportDashboard(userName: name)));
-      } else if (roleId == 'backend' ||
-          roleId == 'admin' ||
-          roleId == 'superadmin' ||
-          roleId == 'stateadmin') {
+            MaterialPageRoute(builder: (context) => AvoDashboard(userName: name)));
+      } else if (currentUserRoleLevel >= 2) {
         Navigator.pushReplacement(context,
             MaterialPageRoute(builder: (context) => BackendDashboard(userName: name)));
       } else {
@@ -217,6 +291,26 @@ class _LoginPageState extends State<LoginPage> {
                   if (_codeSent) TextField(controller: _otpController, keyboardType: TextInputType.number, textAlign: TextAlign.center, maxLength: 6, decoration: InputDecoration(counterText: "", hintText: "------", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
                   const SizedBox(height: 30),
                   SizedBox(width: double.infinity, height: 55, child: ElevatedButton(onPressed: _isLoading ? null : (_codeSent ? _handleVerifyOtp : _handleSendOtp), style: ElevatedButton.styleFrom(backgroundColor: Colors.green, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : Text(_codeSent ? 'VERIFY & LOGIN' : 'SEND OTP', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)))),
+                  if (_codeSent) ...[
+                    const SizedBox(height: 12),
+                    Row(children: [
+                      Expanded(
+                        child: TextButton.icon(
+                          onPressed: _isLoading ? null : () => setState(() { _codeSent = false; _otpController.clear(); }),
+                          icon: const Icon(Icons.arrow_back, size: 16),
+                          label: const Text("Change Number"),
+                          style: TextButton.styleFrom(foregroundColor: Colors.grey),
+                        ),
+                      ),
+                      Expanded(
+                        child: TextButton(
+                          onPressed: _isLoading ? null : _handleSendOtp,
+                          style: TextButton.styleFrom(foregroundColor: Colors.green),
+                          child: const Text("Resend OTP", style: TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ]),
+                  ],
                   if (!_codeSent && _savedPhone != null) ...[const SizedBox(height: 30), const Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 10), child: Text("OR")), Expanded(child: Divider())]), const SizedBox(height: 20), Center(child: GestureDetector(onTap: _handleBiometricLogin, child: Column(children: [Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), shape: BoxShape.circle, border: Border.all(color: Colors.green, width: 2)), child: const Icon(Icons.fingerprint, size: 40, color: Colors.green)), const SizedBox(height: 10), Text("Login as $_savedName", style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold))])))]
               ]),
             ),
@@ -241,11 +335,9 @@ class StakeholderDashboard extends StatefulWidget {
 class _StakeholderDashboardState extends State<StakeholderDashboard> {
   final ApiService _api = ApiService();
   bool _isLoading = true;
-  List<dynamic> _allCases = []; 
-  List<dynamic> _visibleCases = [];
-  
-  Map<String, int> _counts = {"All": 0, "Stakeholder": 0, "Backend": 0, "AVO": 0, "QC": 0, "FinalReport": 0};
-  String _selectedTab = "Stakeholder";
+  List<dynamic> _allCases = [];
+  List<dynamic> _cases = [];
+  String _selectedSubTab = "All";
 
   @override
   void initState() {
@@ -255,47 +347,52 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
 
   Future<void> _loadDashboardData() async {
     setState(() => _isLoading = true);
-    
-    _allCases = await _api.getOpenValuations();
-    _allCases.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
-
-    _counts = {"All": _allCases.length, "Stakeholder": 0, "Backend": 0, "AVO": 0, "QC": 0, "FinalReport": 0};
-    for (var item in _allCases) {
-      String wf = (item['workflow'] ?? "").toString().toLowerCase();
-      if (wf.contains("stakeholder")) _counts["Stakeholder"] = _counts["Stakeholder"]! + 1;
-      else if (wf.contains("backend")) _counts["Backend"] = _counts["Backend"]! + 1;
-      else if (wf.contains("avo") || wf.contains("inspection")) _counts["AVO"] = _counts["AVO"]! + 1;
-      else if (wf.contains("qc") || wf.contains("quality")) _counts["QC"] = _counts["QC"]! + 1;
-      else _counts["FinalReport"] = _counts["FinalReport"]! + 1;
-    }
-
-    if (mounted) {
-      _applyFilter();
+    try {
+      final all = await _api.getOpenValuations();
+      all.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
+      // Filter to Stakeholder step only
+      final filtered = all.where((c) {
+        final wf = (c['workflow'] ?? "").toString().toLowerCase();
+        return wf.contains("stakeholder");
+      }).toList();
+      if (mounted) {
+        setState(() {
+          _allCases = filtered;
+          _isLoading = false;
+        });
+        _applySubTab();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to load cases: $e"), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
-  void _applyFilter() {
-    List<dynamic> filtered = [];
-    for (var item in _allCases) {
-      String wf = (item['workflow'] ?? "").toString().toLowerCase();
-      if (_selectedTab == "All") filtered.add(item);
-      else if (_selectedTab == "Stakeholder" && wf.contains("stakeholder")) filtered.add(item);
-      else if (_selectedTab == "Backend" && wf.contains("backend")) filtered.add(item);
-      else if (_selectedTab == "AVO" && (wf.contains("avo") || wf.contains("inspection"))) filtered.add(item);
-      else if (_selectedTab == "QC" && (wf.contains("qc") || wf.contains("quality"))) filtered.add(item);
-      else if (_selectedTab == "FinalReport" && wf.contains("final")) filtered.add(item);
+  void _applySubTab() {
+    List<dynamic> filtered;
+    if (_selectedSubTab == "Returned") {
+      filtered = _allCases.where((c) {
+        final s = (c['status'] ?? "").toString().toLowerCase();
+        return s.contains("return");
+      }).toList();
+    } else if (_selectedSubTab == "Pending") {
+      filtered = _allCases.where((c) {
+        final s = (c['status'] ?? "").toString().toLowerCase();
+        return !s.contains("return");
+      }).toList();
+    } else {
+      filtered = List.from(_allCases);
     }
-    setState(() {
-      _visibleCases = filtered;
-      _isLoading = false;
-    });
+    setState(() => _cases = filtered);
   }
 
-  void _onTabSelected(String tab) {
-    setState(() {
-      _selectedTab = tab;
-      _applyFilter();
-    });
+  void _onSubTabSelected(String tab) {
+    setState(() => _selectedSubTab = tab);
+    _applySubTab();
   }
 
   @override
@@ -328,17 +425,11 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
-                _buildTabChip("All", _counts["All"]!),
+                _buildTabChip("All", _allCases.length),
                 const SizedBox(width: 8),
-                _buildTabChip("Stakeholder", _counts["Stakeholder"]!),
+                _buildTabChip("Pending", _allCases.where((c) => !(c['status'] ?? "").toString().toLowerCase().contains("return")).length),
                 const SizedBox(width: 8),
-                _buildTabChip("Backend", _counts["Backend"]!),
-                const SizedBox(width: 8),
-                _buildTabChip("AVO", _counts["AVO"]!),
-                const SizedBox(width: 8),
-                _buildTabChip("QC", _counts["QC"]!),
-                const SizedBox(width: 8),
-                _buildTabChip("FinalReport", _counts["FinalReport"]!),
+                _buildTabChip("Returned", _allCases.where((c) => (c['status'] ?? "").toString().toLowerCase().contains("return")).length),
               ],
             ),
           ),
@@ -346,12 +437,12 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
           Expanded(
             child: _isLoading 
               ? const Center(child: CircularProgressIndicator()) 
-              : _visibleCases.isEmpty 
-                  ? const Center(child: Text("No pending cases in this tab.", style: TextStyle(color: Colors.grey)))
+              : _cases.isEmpty
+                  ? const Center(child: Text("No cases in this view.", style: TextStyle(color: Colors.grey)))
                   : ListView.builder(
                       padding: const EdgeInsets.all(16),
-                      itemCount: _visibleCases.length,
-                      itemBuilder: (context, index) => _buildCard(_visibleCases[index]),
+                      itemCount: _cases.length,
+                      itemBuilder: (context, index) => _buildCard(_cases[index]),
                     ),
           ),
         ],
@@ -366,9 +457,9 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
   }
 
   Widget _buildTabChip(String label, int count) {
-    bool isSelected = _selectedTab == label;
+    bool isSelected = _selectedSubTab == label;
     return GestureDetector(
-      onTap: () => _onTabSelected(label),
+      onTap: () => _onSubTabSelected(label),
       child: Chip(
         label: Text("$label ($count)", style: TextStyle(color: isSelected ? Colors.white : Colors.green, fontWeight: FontWeight.bold)),
         backgroundColor: isSelected ? Colors.green : Colors.green.withOpacity(0.1),
@@ -377,21 +468,39 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
     );
   }
 
+  Color _tatColor(int days) {
+    if (days <= 1) return Colors.green;
+    if (days == 2) return Colors.orange;
+    return Colors.red;
+  }
+
+  Color _tatBgColor(int days) {
+    if (days <= 1) return Colors.green.shade50;
+    if (days == 2) return Colors.orange.shade50;
+    return Colors.red.shade50;
+  }
+
   Widget _buildCard(Map<String, dynamic> item) {
     String plate = item['vehicleNumber'] ?? "Unknown";
     String location = item['location'] ?? "Unknown";
     String applicant = item['applicantName'] ?? "Unknown";
-    String status = item['workflow'] ?? "Stakeholder"; 
-    
-    String? dateStr = item['createdAt']; 
+    String status = item['workflow'] ?? "Stakeholder";
+    String itemStatus = item['status'] ?? "";
+    bool redFlag = item['redFlag'] == true;
+    String? assignedTo = item['assignedTo']?.toString();
+    if (assignedTo != null && assignedTo.isEmpty) assignedTo = null;
+
+    String? dateStr = item['createdAt'];
     int daysOld = 0;
     if (dateStr != null) {
       DateTime created = DateTime.tryParse(dateStr) ?? DateTime.now();
       daysOld = DateTime.now().difference(created).inDays;
     }
 
-    Color ageColor = daysOld > 30 ? Colors.red : Colors.green;
-    Color bgAgeColor = daysOld > 30 ? Colors.red.shade50 : Colors.green.shade50;
+    Color ageColor = _tatColor(daysOld);
+    Color bgAgeColor = _tatBgColor(daysOld);
+
+    bool isReturned = itemStatus.toLowerCase().contains("return");
 
     return Card(
       elevation: 2,
@@ -410,8 +519,39 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
                   Text(plate, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
                   Text("$location • $applicant", style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-                  const SizedBox(height: 4),
-                  Text("Step: $status", style: const TextStyle(fontSize: 10, color: Colors.blueGrey, fontWeight: FontWeight.bold)),
+                  if (assignedTo != null) ...[
+                    const SizedBox(height: 2),
+                    Text("Assigned: $assignedTo", style: const TextStyle(fontSize: 11, color: Colors.blueGrey)),
+                  ],
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.blueGrey.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.blueGrey.shade200),
+                        ),
+                        child: Text(status, style: const TextStyle(fontSize: 10, color: Colors.blueGrey, fontWeight: FontWeight.bold)),
+                      ),
+                      if (redFlag) ...[
+                        const SizedBox(width: 6),
+                        const Text("⚑", style: TextStyle(color: Colors.red, fontSize: 14)),
+                      ],
+                      if (itemStatus.isNotEmpty) ...[
+                        const SizedBox(width: 6),
+                        Text(
+                          itemStatus,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: isReturned ? Colors.red : Colors.blueGrey,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -421,26 +561,13 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(color: bgAgeColor, borderRadius: BorderRadius.circular(4)),
-                  child: Text("$daysOld Days Old", style: TextStyle(color: ageColor, fontSize: 10, fontWeight: FontWeight.bold)),
+                  child: Text("TAT: ${daysOld}d", style: TextStyle(color: ageColor, fontSize: 10, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 8),
                 SizedBox(
                   height: 30,
                   child: OutlinedButton(
-                    onPressed: () {
-                      String wf = status.toLowerCase();
-                      if (wf.contains("backend")) {
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => BackendCaseDetailsPage(summaryData: item))).then((_) => _loadDashboardData());
-                      } else if (wf.contains("avo") || wf.contains("inspection")) {
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => InspectionFormPage(summaryData: item))).then((_) => _loadDashboardData());
-                      } else if (wf.contains("qc") || wf.contains("qualitycontrol") || wf.contains("quality")) {
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => QcDetailPage(summaryData: item))).then((_) => _loadDashboardData());
-                      } else if (wf.contains("final") || wf.contains("finalreport")) {
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => FinalReportDetailPage(summaryData: item))).then((_) => _loadDashboardData());
-                      } else {
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => VehicleDetailsPage(summaryData: item))).then((_) => _loadDashboardData());
-                      }
-                    },
+                    onPressed: () => navigateToCase(context, item, _loadDashboardData),
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(color: Colors.deepPurple.shade200),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -448,7 +575,7 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
                     ),
                     child: const Text("ENTER", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                   ),
-                )
+                ),
               ],
             )
           ],
@@ -521,6 +648,29 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
     });
   }
 
+  @override
+  void dispose() {
+    _pincodeController.dispose();
+    _executiveNameController.dispose();
+    _contactController.dispose();
+    _whatsappController.dispose();
+    _emailController.dispose();
+    _stakeholderNameController.dispose();
+    _locationController.dispose();
+    _cityController.dispose();
+    _districtController.dispose();
+    _divisionController.dispose();
+    _stateController.dispose();
+    _countryController.dispose();
+    _applicantNameController.dispose();
+    _applicantContactController.dispose();
+    _remarksController.dispose();
+    _vehicleNoController.dispose();
+    _vehicleSegmentController.dispose();
+    _valuationTypeController.dispose();
+    super.dispose();
+  }
+
   Future<void> _fetchPincodeDetails(String pincode) async {
     setState(() => _isLoadingPincode = true);
     try {
@@ -543,7 +693,7 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
             const SnackBar(content: Text("Invalid Pincode"), backgroundColor: Colors.orange));
       }
     } catch (e) {
-      print("Error fetching pincode: $e");
+      debugPrint("Error fetching pincode: $e");
     } finally {
       setState(() => _isLoadingPincode = false);
     }
@@ -937,6 +1087,27 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
     _loadFullDetails();
   }
 
+  @override
+  void dispose() {
+    _executiveNameController.dispose();
+    _contactController.dispose();
+    _whatsappController.dispose();
+    _emailController.dispose();
+    _pincodeController.dispose();
+    _locationController.dispose();
+    _blockController.dispose();
+    _districtController.dispose();
+    _divisionController.dispose();
+    _stateController.dispose();
+    _countryController.dispose();
+    _applicantNameController.dispose();
+    _applicantContactController.dispose();
+    _remarksController.dispose();
+    _vehicleNoController.dispose();
+    _vehicleSegmentController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadFullDetails() async {
     String id = widget.summaryData['valuationId'] ?? widget.summaryData['id'] ?? "";
     String vehicleNo = widget.summaryData['vehicleNumber'] ?? widget.summaryData['VehicleNumber'] ?? "";
@@ -1011,7 +1182,7 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
           }
         });
       }
-    } catch (e) { print(e); }
+    } catch (e) { debugPrint("Pincode fetch error: $e"); }
   }
 
   void _onPincodeChanged(String val) {
@@ -1090,33 +1261,8 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
   }
 
   Future<void> _directSubmit() async {
-    setState(() => _isSubmitting = true);
-    
-    var d = {...widget.summaryData, ..._fullData};
-    String id = widget.summaryData['valuationId'] ?? widget.summaryData['id'] ?? "";
-    int stepOrder = widget.summaryData['workflowStepOrder'] ?? widget.summaryData['stepOrder'] ?? 1;
-
-    String vNo = _vehicleNoController.text.trim();
-    if (vNo.isEmpty) vNo = _getUniversalValue(d, ['VehicleNumber', 'vehicleNumber']);
-    if (vNo.isEmpty) vNo = "UNKNOWN";
-
-    String contact = _applicantContactController.text.trim();
-    if (contact.isEmpty) contact = _getUniversalValue(d, ['ApplicantContact', 'applicantContact']);
-    if (contact.isEmpty) contact = "0000000000";
-
-    await api.startInitialWorkflow(id, vNo, contact);
-
-    var advanceResult = await api.advanceToNextStage(id, stepOrder, vNo, contact);
-    
-    if (!mounted) return;
-    setState(() => _isSubmitting = false);
-
-    if (advanceResult["success"] == true) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Pushed to Next Step Successfully!"), backgroundColor: Colors.green));
-      Navigator.pop(context);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error advancing: ${advanceResult['message']}"), backgroundColor: Colors.red));
-    }
+    // Delegates to handleSubmit which validates, saves form, then advances workflow
+    await _handleSubmit();
   }
 
   bool _validateMandatory() {
@@ -1281,6 +1427,38 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
     return Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [labelWidget, const SizedBox(height: 6), DropdownButtonFormField<String>(value: value, isExpanded: true, decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)), items: items.map((item) => DropdownMenuItem(value: item, child: Text(item, style: const TextStyle(fontSize: 13)))).toList(), onChanged: onChanged)]));
   }
   
+  Widget _buildStageChip(String label, bool active,
+      {VoidCallback? onTap, bool locked = false}) {
+    if (locked) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+            color: Colors.grey[100],
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.grey.shade300)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.lock_outline, size: 12, color: Colors.grey[400]),
+          const SizedBox(width: 4),
+          Text(label, style: TextStyle(color: Colors.grey[400], fontSize: 12, fontWeight: FontWeight.w500)),
+        ]),
+      );
+    }
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+            color: active ? Colors.green : Colors.grey[200],
+            borderRadius: BorderRadius.circular(4)),
+        child: Text(label,
+            style: TextStyle(
+                color: active ? Colors.white : Colors.black,
+                fontWeight: FontWeight.bold,
+                fontSize: 12)),
+      ),
+    );
+  }
+
   Widget _buildSection({required String title, required List<Widget> children, bool isOpen = false}) {
     return Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade300)), child: ExpansionTile(initiallyExpanded: isOpen, title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)), children: children));
   }
@@ -1309,7 +1487,45 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade300)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text("Workflow Status", style: TextStyle(fontWeight: FontWeight.bold)), const Text("Stakeholder — step 1", style: TextStyle(color: Colors.grey))]), const Divider(height: 20), Text("Vehicle: ${_vehicleNoController.text}", style: const TextStyle(fontWeight: FontWeight.bold))])),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade300)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  const Text("Workflow Status", style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Text("Stakeholder — step 1", style: TextStyle(color: Colors.grey)),
+                ]),
+                const Divider(height: 16),
+                Text("Vehicle: ${_vehicleNoController.text}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
+                    _buildStageChip("Stake Holder", true),
+                    const SizedBox(width: 8),
+                    _buildStageChip("Backend", false,
+                      locked: currentUserRoleLevel < 2,
+                      onTap: currentUserRoleLevel >= 2 ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => BackendCaseDetailsPage(summaryData: widget.summaryData))) : null,
+                    ),
+                    const SizedBox(width: 8),
+                    _buildStageChip("AVO", false,
+                      locked: currentUserRoleLevel < 3,
+                      onTap: currentUserRoleLevel >= 3 ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => InspectionFormPage(summaryData: widget.summaryData, initialTab: "AVO"))) : null,
+                    ),
+                    const SizedBox(width: 8),
+                    _buildStageChip("QC", false,
+                      locked: currentUserRoleLevel < 4,
+                      onTap: currentUserRoleLevel >= 4 ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => QcDetailPage(summaryData: widget.summaryData))) : null,
+                    ),
+                    const SizedBox(width: 8),
+                    _buildStageChip("Final Report", false,
+                      locked: currentUserRoleLevel < 5,
+                      onTap: currentUserRoleLevel >= 5 ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => FinalReportDetailPage(summaryData: widget.summaryData))) : null,
+                    ),
+                  ]),
+                ),
+              ]),
+            ),
             const SizedBox(height: 15),
             
             if (!_isEditing)

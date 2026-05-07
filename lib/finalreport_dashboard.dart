@@ -4,7 +4,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'services/api_service.dart';
-import 'vehicle_media_page.dart';
 import 'main.dart';
 import 'avo_dashboard.dart';
 import 'qc_dashboard.dart';
@@ -24,7 +23,9 @@ class FinalReportDashboard extends StatefulWidget {
 class _FinalReportDashboardState extends State<FinalReportDashboard> {
   final ApiService _api = ApiService();
   bool _isLoading = true;
+  List<dynamic> _allCases = [];
   List<dynamic> _cases = [];
+  String _selectedSubTab = "All";
 
   @override
   void initState() {
@@ -38,27 +39,81 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
       final all = await _api.getOpenValuations();
       all.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
 
-      // Filter to FinalReport step only
-      final filtered = all.where((c) {
-        final wf = (c['workflow'] ?? "").toString().toLowerCase();
-        return wf.contains("finalreport") ||
-            wf.contains("final") ||
-            wf == "5";
-      }).toList();
-
+      // Admin sees ALL cases across every stage
       if (mounted) {
         setState(() {
-          _cases = filtered;
+          _allCases = all;
           _isLoading = false;
         });
+        _applySubTab();
       }
-    } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to load cases: $e"), backgroundColor: Colors.red),
+        );
+      }
     }
+  }
+
+  void _applySubTab() {
+    List<dynamic> filtered;
+    if (_selectedSubTab == "All") {
+      filtered = List.from(_allCases);
+    } else {
+      filtered = _allCases.where((c) {
+        final wf = (c['workflow'] ?? "").toString().toLowerCase();
+        if (_selectedSubTab == "Stakeholder") return wf.contains("stakeholder");
+        if (_selectedSubTab == "Backend") return wf.contains("backend");
+        if (_selectedSubTab == "AVO") return wf.contains("avo") || wf.contains("inspection");
+        if (_selectedSubTab == "QC") return wf.contains("qc") || wf.contains("quality");
+        if (_selectedSubTab == "FinalReport") return wf.contains("final") || wf.contains("finalreport");
+        return true;
+      }).toList();
+    }
+    setState(() => _cases = filtered);
+  }
+
+  int _stageCount(String stage) {
+    return _allCases.where((c) {
+      final wf = (c['workflow'] ?? "").toString().toLowerCase();
+      if (stage == "Stakeholder") return wf.contains("stakeholder");
+      if (stage == "Backend") return wf.contains("backend");
+      if (stage == "AVO") return wf.contains("avo") || wf.contains("inspection");
+      if (stage == "QC") return wf.contains("qc") || wf.contains("quality");
+      if (stage == "FinalReport") return wf.contains("final") || wf.contains("finalreport");
+      return true;
+    }).length;
+  }
+
+  void _onSubTabSelected(String tab) {
+    setState(() => _selectedSubTab = tab);
+    _applySubTab();
+  }
+
+  Widget _buildSubTabChip(String label, int count) {
+    final bool isSelected = _selectedSubTab == label;
+    return GestureDetector(
+      onTap: () => _onSubTabSelected(label),
+      child: Chip(
+        label: Text("$label ($count)",
+            style: TextStyle(
+                color: isSelected ? Colors.white : Colors.teal,
+                fontWeight: FontWeight.bold,
+                fontSize: 12)),
+        backgroundColor: isSelected ? Colors.teal : Colors.teal.withOpacity(0.1),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: isSelected ? Colors.teal : Colors.transparent)),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final int allCount = _allCases.length;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -69,46 +124,63 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
           children: [
             const Text(
               "ProntoMoto — Final Report",
-              style: TextStyle(
-                  color: Colors.black, fontWeight: FontWeight.bold, fontSize: 17),
+              style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 17),
             ),
-            Text(
-              "Hello, ${widget.userName}",
-              style: const TextStyle(color: Colors.grey, fontSize: 12),
-            ),
+            Text("Hello, ${widget.userName}", style: const TextStyle(color: Colors.grey, fontSize: 12)),
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.black),
-            onPressed: _load,
-          ),
+          IconButton(icon: const Icon(Icons.refresh, color: Colors.black), onPressed: _load),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.red),
             onPressed: () async {
               await FirebaseAuth.instance.signOut();
               if (context.mounted) {
-                Navigator.pushReplacement(
-                    context, MaterialPageRoute(builder: (_) => const LoginPage()));
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginPage()));
               }
             },
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _cases.isEmpty
-              ? const Center(
-                  child: Text("No cases pending Final Report.",
-                      style: TextStyle(color: Colors.grey)))
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _cases.length,
-                    itemBuilder: (context, i) => _buildCard(_cases[i]),
-                  ),
-                ),
+      body: Column(
+        children: [
+          Container(
+            height: 50,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                _buildSubTabChip("All", allCount),
+                const SizedBox(width: 8),
+                _buildSubTabChip("Stakeholder", _stageCount("Stakeholder")),
+                const SizedBox(width: 8),
+                _buildSubTabChip("Backend", _stageCount("Backend")),
+                const SizedBox(width: 8),
+                _buildSubTabChip("AVO", _stageCount("AVO")),
+                const SizedBox(width: 8),
+                _buildSubTabChip("QC", _stageCount("QC")),
+                const SizedBox(width: 8),
+                _buildSubTabChip("FinalReport", _stageCount("FinalReport")),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _cases.isEmpty
+                    ? const Center(child: Text("No cases in this view.", style: TextStyle(color: Colors.grey)))
+                    : RefreshIndicator(
+                        onRefresh: _load,
+                        child: ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _cases.length,
+                          itemBuilder: (context, i) => _buildCard(_cases[i]),
+                        ),
+                      ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -116,6 +188,11 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
     final plate = item['vehicleNumber'] ?? "Unknown";
     final location = item['location'] ?? "Unknown";
     final applicant = item['applicantName'] ?? "Unknown";
+    final itemStatus = (item['status'] ?? "").toString();
+    final bool redFlag = item['redFlag'] == true;
+    String? assignedTo = item['assignedTo']?.toString();
+    if (assignedTo != null && assignedTo.isEmpty) assignedTo = null;
+    final bool isReturned = itemStatus.toLowerCase().contains("return");
 
     String? dateStr = item['createdAt'];
     int daysOld = 0;
@@ -123,8 +200,8 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
       final created = DateTime.tryParse(dateStr) ?? DateTime.now();
       daysOld = DateTime.now().difference(created).inDays;
     }
-    final ageColor = daysOld > 30 ? Colors.red : Colors.teal;
-    final bgAge = daysOld > 30 ? Colors.red.shade50 : Colors.teal.shade50;
+    final ageColor = daysOld <= 1 ? Colors.green : daysOld == 2 ? Colors.orange : Colors.red;
+    final bgAge = daysOld <= 1 ? Colors.green.shade50 : daysOld == 2 ? Colors.orange.shade50 : Colors.red.shade50;
 
     return Card(
       elevation: 2,
@@ -140,27 +217,23 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(plate,
-                      style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.bold)),
+                  Text(plate, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 4),
-                  Text("$location • $applicant",
-                      style:
-                          TextStyle(fontSize: 12, color: Colors.grey[600])),
-                  const SizedBox(height: 4),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.teal.shade50,
-                      borderRadius: BorderRadius.circular(4),
+                  Text("$location • $applicant", style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                  if (assignedTo != null) ...[
+                    const SizedBox(height: 2),
+                    Text("Assigned: $assignedTo", style: const TextStyle(fontSize: 11, color: Colors.blueGrey)),
+                  ],
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(color: Colors.teal.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.teal.shade200)),
+                      child: Text(item['workflow'] ?? "Unknown", style: const TextStyle(fontSize: 10, color: Colors.teal, fontWeight: FontWeight.bold)),
                     ),
-                    child: const Text("Step: Final Report",
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.teal,
-                            fontWeight: FontWeight.bold)),
-                  ),
+                    if (redFlag) ...[const SizedBox(width: 6), const Text("⚑", style: TextStyle(color: Colors.red, fontSize: 14))],
+                    if (itemStatus.isNotEmpty) ...[const SizedBox(width: 6), Text(itemStatus, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isReturned ? Colors.red : Colors.blueGrey))],
+                  ]),
                 ],
               ),
             ),
@@ -173,7 +246,7 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
                   decoration: BoxDecoration(
                       color: bgAge,
                       borderRadius: BorderRadius.circular(4)),
-                  child: Text("$daysOld Days Old",
+                  child: Text("TAT: ${daysOld}d",
                       style: TextStyle(
                           color: ageColor,
                           fontSize: 10,
@@ -183,15 +256,7 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
                 SizedBox(
                   height: 30,
                   child: OutlinedButton(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              FinalReportDetailPage(summaryData: item),
-                        ),
-                      ).then((_) => _load());
-                    },
+                    onPressed: () => navigateToCase(context, item, _load),
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(color: Colors.teal.shade300),
                       shape: RoundedRectangleBorder(
@@ -232,6 +297,7 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
   bool _isEditing = false;
   bool _isCompleting = false;
   bool _isReturning = false;
+  bool _isReturningReport = false;
 
   // Server data
   Map<String, dynamic> _finalReport = {};
@@ -320,8 +386,13 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
 
         _isLoading = false;
       });
-    } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to load case details: $e"), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -449,7 +520,7 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
     );
     if (!mounted) return;
     if (payRes['success'] != true) {
-      print("WARN: Payment endpoint save failed (non-fatal): ${payRes['message']}");
+      debugPrint("WARN: Payment endpoint save failed (non-fatal): ${payRes['message']}");
     }
 
     // 3. completeWorkflow(5) — closes the FinalReport workflow step in Cosmos
@@ -457,7 +528,7 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
         await api.completeWorkflow(ctx["id"]!, 5, ctx["vNo"]!, ctx["contact"]!);
     if (!mounted) return;
     if (wfRes['success'] != true) {
-      print("WARN: completeWorkflow(5) failed (non-fatal): ${wfRes['message']}");
+      debugPrint("WARN: completeWorkflow(5) failed (non-fatal): ${wfRes['message']}");
     }
 
     // 4. Update workflow table to Completed
@@ -552,13 +623,13 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
   // PDF DOWNLOAD
   // ---------------------------------------------------------------------------
   Future<void> _downloadPdf() async {
-    final ctx = _ctx();
-    final baseUrl =
-        "https://prontobackend-bhdnbec2fvd3ecfk.eastus2-01.azurewebsites.net/api";
+    final valuationId = widget.summaryData['valuationId']?.toString() ?? "";
+    if (valuationId.isEmpty) {
+      _showError("Valuation ID not available for PDF generation.");
+      return;
+    }
     final url =
-        "$baseUrl/valuations/${ctx["id"]}/valuationresponse/FinalReport/pdf"
-        "?vehicleNumber=${Uri.encodeComponent(ctx["vNo"]!)}"
-        "&applicantContact=${Uri.encodeComponent(ctx["contact"]!)}";
+        "https://prontomotopdf.azurewebsites.net/api/GenerateReport?valuationId=$valuationId";
 
     try {
       final uri = Uri.parse(url);
@@ -581,6 +652,78 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
     _noteController.clear();
     final notes = await api.getNotes(_ctx()["id"]!);
     if (mounted) setState(() => _notes = notes);
+  }
+
+  // ---------------------------------------------------------------------------
+  // RETURN REPORT DIALOG
+  // ---------------------------------------------------------------------------
+  Future<void> _onReturnReportPressed() async {
+    final reasonController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Return Final Report"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "This case will be returned to Quality Control.",
+              style: TextStyle(color: Colors.grey, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            const Text("Reason", style: TextStyle(color: Colors.grey, fontSize: 13)),
+            const SizedBox(height: 6),
+            TextField(
+              controller: reasonController,
+              autofocus: true,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                hintText: "Enter reason for returning...",
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Confirm Return"),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    final reason = reasonController.text.trim();
+
+    setState(() => _isReturningReport = true);
+    final ctx = _ctx();
+    final id = ctx["id"]!;
+    final vNo = ctx["vNo"]!;
+    final contact = ctx["contact"]!;
+    final stepOrder = widget.summaryData['workflowStepOrder'] != null
+        ? int.tryParse(widget.summaryData['workflowStepOrder'].toString()) ?? 5
+        : widget.summaryData['stepOrder'] != null
+            ? int.tryParse(widget.summaryData['stepOrder'].toString()) ?? 5
+            : 5;
+
+    final result = await api.rejectToPreviousStage(id, stepOrder, vNo, contact, reason: reason.isNotEmpty ? reason : "Rejected from Mobile App");
+    if (!mounted) return;
+    setState(() => _isReturningReport = false);
+
+    if (result['success'] == true) {
+      _showSuccess("Report returned to Quality Control.");
+      Navigator.pop(context);
+    } else {
+      _showError("Return failed: ${result['message']}");
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -719,6 +862,47 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
         SnackBar(content: Text(msg), backgroundColor: Colors.green));
   }
 
+  void _showFullScreenImage(String url, String label) {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: EdgeInsets.zero,
+        child: Stack(
+          children: [
+            Center(
+              child: InteractiveViewer(
+                child: Image.network(
+                  url,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Center(
+                    child: Icon(Icons.broken_image, color: Colors.white, size: 64),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 16,
+              left: 16,
+              right: 48,
+              child: Text(label,
+                  style: const TextStyle(color: Colors.white, fontSize: 14,
+                      shadows: [Shadow(blurRadius: 4, color: Colors.black)])),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // UTILITY
   // ---------------------------------------------------------------------------
@@ -812,6 +996,22 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
                 key: _formKey,
                 child: Column(
                   children: [
+                    // Download PDF button at the top
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _downloadPdf,
+                        icon: const Icon(Icons.picture_as_pdf, size: 18),
+                        label: const Text("Download PDF",
+                            style: TextStyle(fontWeight: FontWeight.bold)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.indigo.shade600,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     _buildHeaderCard(),
                     if (_returnedBy != null) ...[
                       const SizedBox(height: 12),
@@ -985,28 +1185,42 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
     final busy = _isCompleting || _isReturning;
 
     if (!_isEditing) {
-      return Row(children: [
-        Expanded(
-          child: ElevatedButton.icon(
-            onPressed: () => setState(() => _isEditing = true),
-            icon: const Icon(Icons.edit, size: 16),
-            label: const Text("Review & Complete"),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.teal,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12)),
+      return Column(children: [
+        Row(children: [
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => setState(() => _isEditing = true),
+              icon: const Icon(Icons.edit, size: 16),
+              label: const Text("Review & Complete"),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12)),
+            ),
           ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: ElevatedButton.icon(
-            onPressed: _downloadPdf,
-            icon: const Icon(Icons.picture_as_pdf, size: 16),
-            label: const Text("PDF"),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.indigo.shade600,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: _downloadPdf,
+              icon: const Icon(Icons.picture_as_pdf, size: 16),
+              label: const Text("PDF"),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.indigo.shade600,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12)),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.arrow_back, size: 16),
+            label: const Text("Back"),
+            style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                side: const BorderSide(color: Colors.grey)),
           ),
         ),
       ]);
@@ -1074,6 +1288,25 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
           ),
         ),
       ]),
+      const SizedBox(height: 8),
+      SizedBox(
+        width: double.infinity,
+        child: ElevatedButton(
+          onPressed: (busy || _isReturningReport) ? null : _onReturnReportPressed,
+          style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade700,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 12)),
+          child: _isReturningReport
+              ? const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(
+                      color: Colors.white, strokeWidth: 2))
+              : const Text("RETURN REPORT",
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+      ),
     ]);
   }
 
@@ -1282,19 +1515,6 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ElevatedButton.icon(
-              icon: const Icon(Icons.photo_camera, size: 16),
-              label: const Text("View / Upload Images"),
-              onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => VehicleMediaPage(
-                          valuationId: _ctx()["id"]!))),
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF3F51B5),
-                  foregroundColor: Colors.white),
-            ),
-            const SizedBox(height: 16),
             if (entries.isEmpty)
               const Text("No photos available.",
                   style: TextStyle(
@@ -1318,32 +1538,35 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
                     child: Column(
                       children: [
                         Expanded(
-                          child: ClipRRect(
-                            borderRadius: const BorderRadius.vertical(
-                                top: Radius.circular(4)),
-                            child: Image.network(
-                              e.value.toString(),
-                              fit: BoxFit.cover,
-                              width: double.infinity,
-                              errorBuilder: (_, __, ___) => Container(
-                                color: Colors.grey.shade200,
-                                child: const Center(
-                                    child: Icon(Icons.broken_image,
-                                        color: Colors.grey, size: 40)),
+                          child: GestureDetector(
+                            onTap: () => _showFullScreenImage(e.value.toString(), e.key),
+                            child: ClipRRect(
+                              borderRadius: const BorderRadius.vertical(
+                                  top: Radius.circular(4)),
+                              child: Image.network(
+                                e.value.toString(),
+                                fit: BoxFit.cover,
+                                width: double.infinity,
+                                errorBuilder: (_, __, ___) => Container(
+                                  color: Colors.grey.shade200,
+                                  child: const Center(
+                                      child: Icon(Icons.broken_image,
+                                          color: Colors.grey, size: 40)),
+                                ),
+                                loadingBuilder: (ctx, child, prog) =>
+                                    prog == null
+                                        ? child
+                                        : Container(
+                                            color: Colors.grey.shade100,
+                                            child: const Center(
+                                                child: SizedBox(
+                                                    height: 24,
+                                                    width: 24,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                            strokeWidth: 2))),
+                                          ),
                               ),
-                              loadingBuilder: (ctx, child, prog) =>
-                                  prog == null
-                                      ? child
-                                      : Container(
-                                          color: Colors.grey.shade100,
-                                          child: const Center(
-                                              child: SizedBox(
-                                                  height: 24,
-                                                  width: 24,
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                          strokeWidth: 2))),
-                                        ),
                             ),
                           ),
                         ),
