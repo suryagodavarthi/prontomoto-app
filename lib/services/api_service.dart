@@ -9,8 +9,9 @@ class ApiService {
   final String baseUrl = "https://prontobackend-bhdnbec2fvd3ecfk.eastus2-01.azurewebsites.net/api";
 
   // Default timeout for non-AI calls. AI submission gets its own (longer) timeout.
-  static const Duration _defaultTimeout = Duration(seconds: 20);
-  static const Duration _aiTimeout = Duration(seconds: 30);
+  static const Duration _defaultTimeout = Duration(seconds: 40);
+  static const Duration _loginTimeout = Duration(seconds: 40);
+  static const Duration _aiTimeout = Duration(seconds: 60);
 
   // ===========================================================================
   // 1. AUTHENTICATION
@@ -18,7 +19,7 @@ class ApiService {
   Future<Map<String, dynamic>> loginUser(String inputPhone) async {
     try {
       final allUsersUrl = Uri.parse('$baseUrl/users/all');
-      final response = await http.get(allUsersUrl).timeout(_defaultTimeout);
+      final response = await http.get(allUsersUrl).timeout(_loginTimeout);
       if (response.statusCode == 200) {
         List<dynamic> allUsers = jsonDecode(response.body);
         var user = allUsers.firstWhere(

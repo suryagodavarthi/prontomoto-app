@@ -168,7 +168,11 @@ class _LoginPageState extends State<LoginPage> {
           setState(() { _isLoading = false; _codeSent = true; _verificationId = verificationId; });
           _showSnack("OTP Sent", Colors.green);
         },
-        codeAutoRetrievalTimeout: (String verificationId) => _verificationId = verificationId,
+        codeAutoRetrievalTimeout: (String verificationId) {
+          _verificationId = verificationId;
+          // If OTP was never sent (codeSent didn't fire), stop the spinner
+          if (!_codeSent) setState(() => _isLoading = false);
+        },
       );
     } catch (e) {
       setState(() => _isLoading = false);
