@@ -123,7 +123,7 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              "ProntoMoto — Final Report",
+              "Vehga — Final Report",
               style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 17),
             ),
             Text("Hello, ${widget.userName}", style: const TextStyle(color: Colors.grey, fontSize: 12)),

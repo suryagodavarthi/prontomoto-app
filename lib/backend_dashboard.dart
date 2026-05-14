@@ -89,7 +89,7 @@ class _BackendDashboardState extends State<BackendDashboard> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("ProntoMoto Backend", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
+            const Text("Vehga Backend", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
             Text("Hello, ${widget.userName}", style: const TextStyle(color: Colors.grey, fontSize: 12)),
           ],
         ),

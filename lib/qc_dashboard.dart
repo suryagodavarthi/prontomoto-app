@@ -114,7 +114,7 @@ class _QcDashboardState extends State<QcDashboard> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("ProntoMoto QC",
+            const Text("Vehga QC",
                 style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
             Text("Hello, ${widget.userName}", style: const TextStyle(color: Colors.grey, fontSize: 12)),
           ],

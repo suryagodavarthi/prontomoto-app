@@ -100,10 +100,11 @@ class ProntoMotoApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'ProntoMoto',
+      title: 'Vehga Inspections',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        primarySwatch: Colors.green,
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF007B7B)),
+        primaryColor: const Color(0xFF007B7B),
         useMaterial3: true,
         scaffoldBackgroundColor: Colors.white,
         fontFamily: 'Roboto',
@@ -273,13 +274,13 @@ class _LoginPageState extends State<LoginPage> {
           children: [
             Container(
               height: 300,
-              decoration: const BoxDecoration(color: Colors.green, borderRadius: BorderRadius.only(bottomLeft: Radius.circular(50), bottomRight: Radius.circular(50))),
+              decoration: const BoxDecoration(color: Color(0xFF007B7B), borderRadius: BorderRadius.only(bottomLeft: Radius.circular(50), bottomRight: Radius.circular(50))),
               child: Center(
                 child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Container(padding: const EdgeInsets.all(15), decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle), child: const Icon(Icons.directions_car, size: 50, color: Colors.green)),
-                    const SizedBox(height: 15),
-                    const Text('ProntoMoto', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1.2)),
-                    const Text('Valuation Dashboard', style: TextStyle(fontSize: 14, color: Colors.white70)),
+                    Image.asset('assets/vehga-logo.png', width: 160, height: 80, fit: BoxFit.contain, color: Colors.white, colorBlendMode: BlendMode.srcIn),
+                    const SizedBox(height: 20),
+                    const Text('Vehga Inspections', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1.2)),
+                    const Text('Private Limited', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.white, letterSpacing: 1.0)),
                 ]),
               ),
             ),
@@ -291,10 +292,10 @@ class _LoginPageState extends State<LoginPage> {
                   const SizedBox(height: 8),
                   Text(_codeSent ? "Enter the code sent to your mobile" : "Please sign in to continue", style: TextStyle(fontSize: 14, color: Colors.grey[600])),
                   const SizedBox(height: 30),
-                  if (!_codeSent) TextField(controller: _phoneController, keyboardType: TextInputType.phone, decoration: InputDecoration(prefixIcon: const Icon(Icons.phone, color: Colors.green), prefixText: "+91 ", labelText: "Phone Number", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
+                  if (!_codeSent) TextField(controller: _phoneController, keyboardType: TextInputType.phone, decoration: InputDecoration(prefixIcon: const Icon(Icons.phone, color: Color(0xFF007B7B)), prefixText: "+91 ", labelText: "Phone Number", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
                   if (_codeSent) TextField(controller: _otpController, keyboardType: TextInputType.number, textAlign: TextAlign.center, maxLength: 6, decoration: InputDecoration(counterText: "", hintText: "------", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
                   const SizedBox(height: 30),
-                  SizedBox(width: double.infinity, height: 55, child: ElevatedButton(onPressed: _isLoading ? null : (_codeSent ? _handleVerifyOtp : _handleSendOtp), style: ElevatedButton.styleFrom(backgroundColor: Colors.green, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : Text(_codeSent ? 'VERIFY & LOGIN' : 'SEND OTP', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)))),
+                  SizedBox(width: double.infinity, height: 55, child: ElevatedButton(onPressed: _isLoading ? null : (_codeSent ? _handleVerifyOtp : _handleSendOtp), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF007B7B), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : Text(_codeSent ? 'VERIFY & LOGIN' : 'SEND OTP', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)))),
                   if (_codeSent) ...[
                     const SizedBox(height: 12),
                     Row(children: [
@@ -309,13 +310,13 @@ class _LoginPageState extends State<LoginPage> {
                       Expanded(
                         child: TextButton(
                           onPressed: _isLoading ? null : _handleSendOtp,
-                          style: TextButton.styleFrom(foregroundColor: Colors.green),
+                          style: TextButton.styleFrom(foregroundColor: Color(0xFF007B7B)),
                           child: const Text("Resend OTP", style: TextStyle(fontWeight: FontWeight.bold)),
                         ),
                       ),
                     ]),
                   ],
-                  if (!_codeSent && _savedPhone != null) ...[const SizedBox(height: 30), const Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 10), child: Text("OR")), Expanded(child: Divider())]), const SizedBox(height: 20), Center(child: GestureDetector(onTap: _handleBiometricLogin, child: Column(children: [Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.green.withOpacity(0.1), shape: BoxShape.circle, border: Border.all(color: Colors.green, width: 2)), child: const Icon(Icons.fingerprint, size: 40, color: Colors.green)), const SizedBox(height: 10), Text("Login as $_savedName", style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold))])))]
+                  if (!_codeSent && _savedPhone != null) ...[const SizedBox(height: 30), const Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 10), child: Text("OR")), Expanded(child: Divider())]), const SizedBox(height: 20), Center(child: GestureDetector(onTap: _handleBiometricLogin, child: Column(children: [Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Color(0xFF007B7B).withOpacity(0.1), shape: BoxShape.circle, border: Border.all(color: Color(0xFF007B7B), width: 2)), child: const Icon(Icons.fingerprint, size: 40, color: Color(0xFF007B7B))), const SizedBox(height: 10), Text("Login as $_savedName", style: const TextStyle(color: Color(0xFF007B7B), fontWeight: FontWeight.bold))])))]
               ]),
             ),
           ],
@@ -409,7 +410,7 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("ProntoMoto", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
+            const Text("Vehga Inspections Private Limited", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15)),
             Text("Hello, ${widget.userName}", style: const TextStyle(color: Colors.grey, fontSize: 12)),
           ],
         ),
