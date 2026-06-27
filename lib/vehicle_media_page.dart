@@ -61,15 +61,23 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
     "Dashboard": null,
     "Instrument Cluster": null,
     "Engine Bay": null,
-    "Chassis Number Plate": null,
+    "VIN Plate": null,
     "Chassis Imprint": null,
-    "Gear and Seats": null,
+    "Gear (Interior)": null,
+    "Front Seat": null,
+    "Rear Seat": null,
     "Dashboard Close-up": null,
     "Odometer": null,
     "Selfie with Vehicle": null,
     "Underbody": null,
-    "Tires and Rims": null,
+    "Tire - Front Left": null,
+    "Tire - Front Right": null,
+    "Tire - Rear Left": null,
+    "Tire - Rear Right": null,
     "Vehicle Video": null,
+    "Chassis Verification": null,
+    "Chassis Stencil Trace": null,
+    "Working / Operation Photo": null,
   };
 
   final Map<String, String> _backendKeys = {
@@ -84,15 +92,23 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
     "Dashboard": "dashboard",
     "Instrument Cluster": "instrumentCluster",
     "Engine Bay": "engineBay",
-    "Chassis Number Plate": "chassisNumberPlate",
+    "VIN Plate": "vinPlate",
     "Chassis Imprint": "chassisImprint",
-    "Gear and Seats": "gearAndSeats",
+    "Gear (Interior)": "gearInterior",
+    "Front Seat": "frontSeat",
+    "Rear Seat": "rearSeat",
     "Dashboard Close-up": "dashboardCloseup",
     "Odometer": "odometer",
     "Selfie with Vehicle": "selfieWithVehicle",
     "Underbody": "underbody",
-    "Tires and Rims": "tiresAndRims",
+    "Tire - Front Left": "tireFrontLeft",
+    "Tire - Front Right": "tireFrontRight",
+    "Tire - Rear Left": "tireRearLeft",
+    "Tire - Rear Right": "tireRearRight",
     "Vehicle Video": "vehicleVideo",
+    "Chassis Verification": "chassisVerification",
+    "Chassis Stencil Trace": "chassisStencilTrace",
+    "Working / Operation Photo": "workingOperationPhoto",
   };
 
   @override
@@ -217,9 +233,9 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
       "hint": "Open the bonnet fully. Capture the complete engine bay from above.",
       "color": Colors.grey,
     },
-    "Chassis Number Plate": {
+    "VIN Plate": {
       "icon": Icons.pin,
-      "hint": "Locate the chassis number plate (usually on the firewall or door jamb). Ensure all digits are readable.",
+      "hint": "Locate the VIN plate (usually on the firewall or door jamb). Ensure all digits are readable.",
       "color": Colors.red,
     },
     "Chassis Imprint": {
@@ -227,9 +243,19 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
       "hint": "Find the embossed chassis imprint on the body. Light the area and capture all digits clearly.",
       "color": Colors.red,
     },
-    "Gear and Seats": {
+    "Gear (Interior)": {
+      "icon": Icons.settings_input_component,
+      "hint": "Capture the gear lever / gear shift area clearly.",
+      "color": Colors.blueGrey,
+    },
+    "Front Seat": {
       "icon": Icons.event_seat,
-      "hint": "Capture the gear lever area and front seats. Show overall interior condition.",
+      "hint": "Capture both front seats showing condition, upholstery, and headrests.",
+      "color": Colors.blueGrey,
+    },
+    "Rear Seat": {
+      "icon": Icons.event_seat,
+      "hint": "Capture the rear seat row showing condition and upholstery.",
       "color": Colors.blueGrey,
     },
     "Dashboard Close-up": {
@@ -252,15 +278,45 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
       "hint": "Position camera underneath the vehicle. Capture the chassis rails and floor pan condition.",
       "color": Colors.deepOrange,
     },
-    "Tires and Rims": {
+    "Tire - Front Left": {
       "icon": Icons.trip_origin,
-      "hint": "Capture all four tires individually, or group shots showing tread depth and rim condition.",
+      "hint": "Capture the front-left tire. Show tread depth and rim condition clearly.",
+      "color": Colors.green,
+    },
+    "Tire - Front Right": {
+      "icon": Icons.trip_origin,
+      "hint": "Capture the front-right tire. Show tread depth and rim condition clearly.",
+      "color": Colors.green,
+    },
+    "Tire - Rear Left": {
+      "icon": Icons.trip_origin,
+      "hint": "Capture the rear-left tire. Show tread depth and rim condition clearly.",
+      "color": Colors.green,
+    },
+    "Tire - Rear Right": {
+      "icon": Icons.trip_origin,
+      "hint": "Capture the rear-right tire. Show tread depth and rim condition clearly.",
       "color": Colors.green,
     },
     "Vehicle Video": {
       "icon": Icons.videocam,
       "hint": "Walk around the full vehicle in one continuous clip (approx. 30–60 seconds).",
       "color": Colors.deepPurple,
+    },
+    "Chassis Verification": {
+      "icon": Icons.verified,
+      "hint": "Capture the chassis number area for verification. Ensure the number is sharp and fully visible.",
+      "color": Colors.red,
+    },
+    "Chassis Stencil Trace": {
+      "icon": Icons.texture,
+      "hint": "Place paper over the chassis imprint and rub to get the stencil trace. Capture it flat and clearly lit.",
+      "color": Colors.red,
+    },
+    "Working / Operation Photo": {
+      "icon": Icons.play_circle_outline,
+      "hint": "Capture the vehicle running/operating — engine on, lights on, or any functional system in use.",
+      "color": Colors.teal,
     },
   };
 
