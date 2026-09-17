@@ -10,6 +10,7 @@ import 'main.dart';
 import 'backend_dashboard.dart';
 import 'qc_dashboard.dart';
 import 'finalreport_dashboard.dart';
+import 'inspection_field_registry.dart';
 
 // =============================================================================
 // VALUATION-TYPE FIELD VISIBILITY MAP (ported from inspection-update.component.ts)
@@ -426,6 +427,15 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   // valuationType — used for showField visibility map
   String? _valuationTypeKey; // 'four-wheeler' / 'cv' / 'two-wheeler' / 'three-wheeler' / 'tractor' / 'ce'
 
+  // Registry-driven field values: fieldKey → 'GOOD'/'AVERAGE'/'POOR'/'YES'/'NO'/''
+  Map<String, String> _registryValues = {};
+
+  List<InspectionSection> get _registrySections {
+    final vk = normalizeVehicleType(_valuationTypeKey);
+    if (vk == null) return [];
+    return getFieldRegistry(vk);
+  }
+
   String? _selectedAssignee;
   final List<String> _assigneeOptions = [
     "SHEKHAR — +919885255567",
@@ -497,8 +507,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   final _inspectionLocationController = TextEditingController();
 
   // Basic Vehicle Checks (mostly bool dropdowns, plus a couple text)
-  final _vehicleMovedController = TextEditingController();         // bool: Yes/No
-  final _engineStartedController = TextEditingController();        // bool: Yes/No
   final _odometerController = TextEditingController();             // number
   final _vinPlateController = TextEditingController();             // bool: Yes/No
   final _bodyTypeController = TextEditingController();             // free text
@@ -752,10 +760,15 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
           merged.addAll(_stakeholderData);
           merged.addAll(_backendData);
 
-          // Derive valuationType from data — used by showField.
-          // Could come from many sources; check stakeholder + summary first.
+          // Derive the vehicle class used by showField. Portal parity:
+          // valuationType is now "Retail"/"Repo" (not a vehicle class), so when
+          // it doesn't map, fall back to the stakeholder's vehicleSegment.
           final rawType = _getUniversalValue(merged, ['valuationType', 'ValuationType', 'Type']);
           _valuationTypeKey = _normalizeValuationType(rawType);
+          if (_valuationTypeKey == null) {
+            final rawSeg = _getUniversalValue(merged, ['vehicleSegment', 'VehicleSegment']);
+            _valuationTypeKey = _normalizeValuationType(rawSeg);
+          }
 
           _populateStakeholderFields(merged);
           _populateAVOFields(_avoData.isNotEmpty ? _avoData : merged);
@@ -923,8 +936,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     _inspectionLocationController.text = _getUniversalValue(data, ['inspectionLocation', 'location']);
 
     // Bool fields
-    _vehicleMovedController.text = _toBoolStr(_getUniversalValue(data, ['vehicleMoved']));
-    _engineStartedController.text = _toBoolStr(_getUniversalValue(data, ['engineStarted']));
     _vinPlateController.text = _toBoolStr(_getUniversalValue(data, ['vinPlate']));
     _otherAccessoryFitmentController.text = _toBoolStr(_getUniversalValue(data, ['otherAccessoryFitment']));
     _roadWorthyConditionController.text = _toBoolStr(_getUniversalValue(data, ['roadWorthyCondition']));
@@ -1084,6 +1095,26 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     _rearDrawbarController.text = _getUniversalValue(data, ['rearDrawbar', 'RearDrawbar']);
 
     _remarksController.text = _getUniversalValue(data, ['remarks']);
+
+    // Populate registry values for all keys in the current vehicle type's registry
+    final vk = normalizeVehicleType(_valuationTypeKey ?? '');
+    if (vk != null) {
+      final Map<String, String> rv = {};
+      for (final section in getFieldRegistry(vk)) {
+        for (final field in section.fields) {
+          var raw = _getUniversalValue(data, [field.key, _toPascalCase(field.key)]).trim();
+          if (field.type == FieldType.condition) {
+            // Upper-cased to match conditionOptions. Vehicle Moved / Engine Started were
+            // true/false before the 2026-09 checklist; read them as the YES / NO they mean.
+            raw = raw.toUpperCase();
+            if (raw == 'TRUE') raw = 'YES';
+            if (raw == 'FALSE') raw = 'NO';
+          }
+          rv[field.key] = raw.isNotEmpty ? raw : (field.defaultValue ?? '');
+        }
+      }
+      _registryValues = rv;
+    }
   }
 
   void _populatePaymentFields(Map<String, dynamic> data) {
@@ -1245,8 +1276,8 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       "dateOfInspection": _dateOfInspectionController.text,
       "inspectionLocation": _inspectionLocationController.text,
       // True booleans
-      "vehicleMoved": _vehicleMovedController.text,         // "true"/"false"
-      "engineStarted": _engineStartedController.text,
+      // vehicleMoved / engineStarted are registry fields now (FUNCTIONALITY) and go out
+      // with _registryValues below as YES / NO.
       "vinPlate": _vinPlateController.text,
       "otherAccessoryFitment": _otherAccessoryFitmentController.text,
       "roadWorthyCondition": _roadWorthyConditionController.text,
@@ -1392,7 +1423,15 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       "rearDrawbar": _rearDrawbarController.text,
       // Remarks
       "remarks": _remarksController.text,
+      // Registry-aligned fields (new Excel-based fields)
+      ..._registryValues,
     };
+  }
+
+  // Converts camelCase key to PascalCase for backend lookup (e.g. tyreCondition → TyreCondition)
+  String _toPascalCase(String key) {
+    if (key.isEmpty) return key;
+    return key[0].toUpperCase() + key.substring(1);
   }
 
   Future<Map<String, dynamic>> _savePayment(Map<String, String> ctx) async {
@@ -2325,6 +2364,72 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     );
   }
 
+  // Builds a registry field: the full conditionOptions dropdown (the same eight answers the
+  // portal offers — this used to offer only GOOD / AVERAGE / POOR), or a whole-number box
+  // for the tyre counts.
+  Widget _buildRegistryField(InspectionField field, bool isEditable) {
+    final List<String> opts = field.type == FieldType.yesNo ? yesNoOptions : conditionOptions;
+
+    final currentVal = _registryValues[field.key] ?? '';
+    final displayVal = currentVal.isNotEmpty ? currentVal : '-';
+
+    Widget labelWidget = Text(field.label, style: TextStyle(color: Colors.grey[600], fontSize: 14));
+
+    if (!isEditable) {
+      return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(flex: 2, child: labelWidget),
+            Expanded(flex: 3, child: Text(displayVal, style: const TextStyle(fontWeight: FontWeight.w500)))
+          ]));
+    }
+
+    if (field.type == FieldType.number) {
+      return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            labelWidget,
+            const SizedBox(height: 6),
+            TextFormField(
+                key: ValueKey('registry-${field.key}'),
+                initialValue: currentVal,
+                keyboardType: TextInputType.number,
+                // Digits only, so it is always a whole number of 0 or more.
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
+                onChanged: (v) => setState(() => _registryValues[field.key] = v.trim()),
+                validator: (v) {
+                  // Missing tyres can't be more than the vehicle has, when both are entered.
+                  if (field.key != 'missingTyres') return null;
+                  final missing = int.tryParse((v ?? '').trim());
+                  final total = int.tryParse((_registryValues['numberOfTyres'] ?? '').trim());
+                  if (missing == null || total == null) return null;
+                  return missing > total ? "Can't be more than the number of tyres" : null;
+                })
+          ]));
+    }
+
+    final String? dropdownValue = opts.contains(currentVal) ? currentVal : null;
+    return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          labelWidget,
+          const SizedBox(height: 6),
+          DropdownButtonFormField<String>(
+              value: dropdownValue,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
+              items: opts
+                  .map((o) => DropdownMenuItem(value: o, child: Text(o, style: const TextStyle(fontSize: 13))))
+                  .toList(),
+              onChanged: (v) => setState(() => _registryValues[field.key] = v ?? ''))
+        ]));
+  }
+
   Widget _buildViewDocRow(String label, String? url, String type, bool canEdit) {
     return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -2482,11 +2587,10 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
         ], isOpen: true),
 
         // ── 2. GENERAL CONDITION ────────────────────────────────────────────
-        if (hv(['vehicleMoved', 'engineStarted', 'odometer', 'vinPlate', 'bodyType',
+        // Vehicle Moved and Engine Started are asked under FUNCTIONALITY, from the registry.
+        if (hv(['odometer', 'vinPlate', 'bodyType',
                  'tyreCondition', 'otherAccessoryFitment', 'roadWorthyCondition']))
           _buildSectionContainer("General Condition", [
-            bd("Vehicle Moved", "vehicleMoved", _vehicleMovedController),
-            bd("Engine Started", "engineStarted", _engineStartedController),
             tf("Odometer (km)", "odometer", _odometerController, kb: TextInputType.number),
             bd("VIN Plate Present", "vinPlate", _vinPlateController),
             tf("Body Type", "bodyType", _bodyTypeController),
@@ -2495,196 +2599,14 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
             bd("Road Worthy Condition", "roadWorthyCondition", _roadWorthyConditionController, t: "OK", f: "Not OK"),
           ]),
 
-        // ── 3. ENGINE & FUEL SYSTEM ─────────────────────────────────────────
-        if (hv(['engineCondition', 'fuelSystem', 'fuelTankCondition', 'fuelTankFe',
-                 'radiator', 'interCooler', 'allHosePipes', 'batteryCondition']))
-          _buildSectionContainer("Engine & Fuel System", [
-            bd("Engine Condition", "engineCondition", _engineConditionController, t: "Good", f: "Not Good"),
-            tf("Fuel System", "fuelSystem", _fuelSystemController),
-            tf("Fuel Tank Condition", "fuelTankCondition", _fuelTankConditionController),
-            tf("Fuel Tank (FE)", "fuelTankFe", _fuelTankFeController),
-            tf("Radiator", "radiator", _radiatorController),
-            tf("Intercooler", "interCooler", _intercoolerController),
-            tf("All Hose & Pipes", "allHosePipes", _allHosePipesController),
-            tf("Battery Condition", "batteryCondition", _batteryConditionController),
-          ]),
-
-        // ── 4. STEERING & SUSPENSION ────────────────────────────────────────
-        if (hv(['brakeSystem', 'suspensionSystem', 'steeringSystem', 'steeringWheel',
-                 'steeringColumn', 'steeringBox', 'steeringLinkages', 'steeringHandle', 'frontForkAssy']))
-          _buildSectionContainer("Steering & Suspension", [
-            bd("Brake System", "brakeSystem", _brakeSystemController, t: "Good", f: "Not Good"),
-            bd("Suspension System", "suspensionSystem", _suspensionSystemController, t: "Good", f: "Not Good"),
-            bd("Steering Assembly", "steeringSystem", _steeringSystemController, t: "Good", f: "Not Good"),
-            tf("Steering Wheel", "steeringWheel", _steeringWheelController),
-            tf("Steering Column", "steeringColumn", _steeringColumnController),
-            tf("Steering Box", "steeringBox", _steeringBoxController),
-            tf("Steering Linkages", "steeringLinkages", _steeringLinkagesController),
-            tf("Steering Handle", "steeringHandle", _steeringHandleController),
-            tf("Front Fork Assembly", "frontForkAssy", _frontForkAssyController),
-          ]),
-
-        // ── 5. TRANSMISSION & DRIVETRAIN ────────────────────────────────────
-        if (hv(['clutchSystem', 'gearboxAssembly', 'propellerShaft', 'differentialAssy',
-                 'driveShafts', 'chainSprocket', 'powerTakeOff', 'retarder',
-                 'differentialLock', 'pto', 'frontAxleFe']))
-          _buildSectionContainer("Transmission & Drivetrain", [
-            bd("Clutch System", "clutchSystem", _clutchSystemController, t: "Good", f: "Not Good"),
-            bd("Gearbox Assembly", "gearboxAssembly", _gearboxAssemblyController, t: "Good", f: "Not Good"),
-            bd("Propeller Shaft", "propellerShaft", _propellerShaftController, t: "Good", f: "Not Good"),
-            bd("Differential Assembly", "differentialAssy", _differentialAssyController, t: "Good", f: "Not Good"),
-            tf("Drive Shafts", "driveShafts", _driveShaftsController),
-            tf("Chain & Sprocket", "chainSprocket", _chainSprocketController),
-            tf("Power Take Off", "powerTakeOff", _powerTakeOffController),
-            tf("Retarder", "retarder", _retarderController),
-            tf("Differential Lock", "differentialLock", _differentialLockController),
-            tf("PTO", "pto", _ptoController),
-            tf("Front Axle (FE)", "frontAxleFe", _frontAxleFeController),
-          ]),
-
-        // ── 6. BODY & STRUCTURE ─────────────────────────────────────────────
-        if (hv(['chassisCondition', 'exteriorCondition', 'bodyCondition', 'interiorCondition',
-                 'bonnet', 'bumpers', 'doors', 'fenders', 'rightSideWing', 'leftSideWing',
-                 'tailGate', 'loadFloor', 'mudguards', 'allGlasses', 'paintWork', 'windshieldGlass',
-                 'frontFairing', 'rearCowls', 'mainStand', 'sideStand', 'frontMudGuard', 'rearMudGuard',
-                 'alloyWheelRim', 'handleBarGrips', 'footRest', 'sideFenders', 'sideUnderRunProtection',
-                 'coachCondition', 'frontWeights', 'rearWeights', 'ropsCanopy', 'counterWeight',
-                 'frontAxles', 'rearAxles', 'boom', 'bucket', 'chainTrack',
-                 'hydraulicCylinders', 'swingUnit']))
-          _buildSectionContainer("Body & Structure", [
-            bd("Chassis Condition", "chassisCondition", _chassisConditionController, t: "Good", f: "Not Good"),
-            tf("Exterior Condition", "exteriorCondition", _exteriorConditionController),
-            tf("Interior Condition", "interiorCondition", _interiorConditionController),
-            tf("Body Condition", "bodyCondition", _bodyConditionController),
-            tf("Bonnet", "bonnet", _bonnetController),
-            bd("Paint Work", "paintWork", _paintWorkController, t: "Good", f: "Not Good"),
-            tf("Windshield / Glass", "windshieldGlass", _windshieldGlassController),
-            tf("Bumpers", "bumpers", _bumpersController),
-            tf("Doors", "doors", _doorsController),
-            tf("Fenders", "fenders", _fendersController),
-            tf("Side Fenders", "sideFenders", _sideFendersController),
-            tf("Right Side Wing", "rightSideWing", _rightSideWingController),
-            tf("Left Side Wing", "leftSideWing", _leftSideWingController),
-            tf("Tail Gate", "tailGate", _tailGateController),
-            tf("Load Floor", "loadFloor", _loadFloorController),
-            tf("Mudguards", "mudguards", _mudguardsController),
-            tf("All Glasses", "allGlasses", _allGlassesController),
-            tf("Front Axles", "frontAxles", _frontAxlesController),
-            tf("Rear Axles", "rearAxles", _rearAxlesController),
-            tf("Front Fairing", "frontFairing", _frontFairingController),
-            tf("Rear Cowls", "rearCowls", _rearCowlsController),
-            tf("Main Stand", "mainStand", _mainStandController),
-            tf("Side Stand", "sideStand", _sideStandController),
-            tf("Front Mud Guard", "frontMudGuard", _frontMudGuardController),
-            tf("Rear Mud Guard", "rearMudGuard", _rearMudGuardController),
-            tf("Alloy Wheel / Rim", "alloyWheelRim", _alloyWheelRimController),
-            tf("Handle Bar Grips", "handleBarGrips", _handleBarGripsController),
-            tf("Foot Rest", "footRest", _footRestController),
-            tf("Side Under-Run Protection", "sideUnderRunProtection", _sideUnderRunProtectionController),
-            tf("Coach Condition", "coachCondition", _coachConditionController),
-            tf("Front Weights", "frontWeights", _frontWeightsController),
-            tf("Rear Weights", "rearWeights", _rearWeightsController),
-            tf("ROPS / Canopy", "ropsCanopy", _ropsCanopyController),
-            tf("Counter Weight", "counterWeight", _counterWeightController),
-            tf("Boom", "boom", _boomController),
-            tf("Bucket", "bucket", _bucketController),
-            tf("Chain Track", "chainTrack", _chainTrackController),
-            tf("Hydraulic Cylinders", "hydraulicCylinders", _hydraulicCylindersController),
-            tf("Swing Unit", "swingUnit", _swingUnitController),
-          ]),
-
-        // ── 7. INTERIOR & CABIN ─────────────────────────────────────────────
-        if (hv(['cabinCondition', 'dashBoard', 'seats', 'upholestry', 'interiorTrims',
-                 'audio', 'airConditioner', 'airBags', 'sunRoof', 'headLamps', 'front', 'rear',
-                 'axles', 'cabCondition', 'passengerSeats', 'emergencyExits',
-                 'luggageCompartment', 'acSystem', 'destinationBoard', 'seatCondition']))
-          _buildSectionContainer("Interior & Cabin", [
-            tf("Cabin Condition", "cabinCondition", _cabinController),
-            tf("Dashboard Condition", "dashBoard", _dashboardController),
-            tf("Seats Condition", "seats", _seatsController),
-            tf("Upholestry", "upholestry", _upholestryController),
-            tf("Interior Trims", "interiorTrims", _interiorTrimsController),
-            tf("Audio", "audio", _audioController),
-            tf("Air Conditioner", "airConditioner", _airConditionerController),
-            tf("Air Bags", "airBags", _airBagsController),
-            tf("Sun Roof", "sunRoof", _sunRoofController),
-            tf("Head Lamps", "headLamps", _headLampsController),
-            tf("Front View", "front", _frontController),
-            tf("Rear View", "rear", _rearController),
-            tf("Axles", "axles", _axlesController),
-            tf("Cab Condition", "cabCondition", _cabConditionController),
-            tf("Passenger Seats", "passengerSeats", _passengerSeatsController),
-            tf("Emergency Exits", "emergencyExits", _emergencyExitsController),
-            tf("Luggage Compartment", "luggageCompartment", _luggageCompartmentController),
-            tf("AC System", "acSystem", _acSystemController),
-            tf("Destination Board", "destinationBoard", _destinationBoardController),
-            tf("Seat Condition", "seatCondition", _seatConditionController),
-          ]),
-
-        // ── 8. ELECTRICAL & INSTRUMENTS ─────────────────────────────────────
-        if (hv(['electricalSystem', 'tailLightsIndicators', 'wiringAssy', 'headLight',
-                 'tailLight', 'indicators', 'hornCondition', 'mirrorCondition',
-                 'sideMirrors', 'speedoMeter']))
-          _buildSectionContainer("Electrical & Instruments", [
-            tf("Electric Assembly", "electricalSystem", _electricAssemblyController),
-            tf("Tail Lights / Indicators", "tailLightsIndicators", _tailLightsIndicatorsController),
-            tf("Wiring Assembly", "wiringAssy", _wiringAssyController),
-            tf("Head Light", "headLight", _headLightController),
-            tf("Tail Light", "tailLight", _tailLightController),
-            tf("Indicators", "indicators", _indicatorsController),
-            tf("Horn Condition", "hornCondition", _hornConditionController),
-            tf("Mirror Condition", "mirrorCondition", _mirrorConditionController),
-            tf("Side Mirrors", "sideMirrors", _sideMirrorsController),
-            tf("Speedometer", "speedoMeter", _speedoMeterController),
-          ]),
-
-        // ── 9. BRAKES & SAFETY ──────────────────────────────────────────────
-        if (hv(['parkingBrake', 'abs', 'frontCrashGuard', 'rearCrashGuard',
-                 'frontBrakeCondition', 'rearBrakeCondition',
-                 'rightIndividualBrakes', 'leftIndividualBrakes']))
-          _buildSectionContainer("Brakes & Safety", [
-            tf("Parking Brake", "parkingBrake", _parkingBrakeController),
-            tf("ABS", "abs", _absController),
-            tf("Front Crash Guard", "frontCrashGuard", _frontCrashGuardController),
-            tf("Rear Crash Guard", "rearCrashGuard", _rearCrashGuardController),
-            tf("Front Brake Condition", "frontBrakeCondition", _frontBrakeConditionController),
-            tf("Rear Brake Condition", "rearBrakeCondition", _rearBrakeConditionController),
-            tf("Right Individual Brakes", "rightIndividualBrakes", _rightIndividualBrakesController),
-            tf("Left Individual Brakes", "leftIndividualBrakes", _leftIndividualBrakesController),
-          ]),
-
-        // ── 10. HYDRAULICS & LIFTING ────────────────────────────────────────
-        if (hv(['hydraulicSystem', 'hydraulicLift', 'hydraulicLiftFe', 'boomArm',
-                 'bucketCondition', 'bladeCondition', 'liftingCapacity',
-                 'threePointLinkage', 'hitchSystem']))
-          _buildSectionContainer("Hydraulics & Lifting", [
-            tf("Hydraulic System", "hydraulicSystem", _hydraulicSystemController),
-            tf("Hydraulic Lift", "hydraulicLift", _hydraulicLiftController),
-            tf("Hydraulic Lift (FE)", "hydraulicLiftFe", _hydraulicLiftFeController),
-            tf("Boom / Arm", "boomArm", _boomArmController),
-            tf("Bucket Condition", "bucketCondition", _bucketConditionController),
-            tf("Blade Condition", "bladeCondition", _bladeConditionController),
-            tf("Lifting Capacity", "liftingCapacity", _liftingCapacityController),
-            tf("Three Point Linkage", "threePointLinkage", _threePointLinkageController),
-            tf("Hitch System", "hitchSystem", _hitchSystemController),
-          ]),
-
-        // ── 11. GROUND ENGAGEMENT & IMPLEMENTS ─────────────────────────────
-        if (hv(['underCarriage', 'crawlerTracks', 'steelRims', 'tyreConditionCe',
-                 'attachmentCondition', 'rockBreaker', 'implementAttachments',
-                 'frontTyreCondition', 'rearTyreCondition', 'rearDrawbar']))
-          _buildSectionContainer("Ground Engagement & Implements", [
-            tf("Under Carriage", "underCarriage", _underCarriageController),
-            tf("Crawler Tracks", "crawlerTracks", _crawlerTracksController),
-            tf("Steel Rims", "steelRims", _steelRimsController),
-            tf("Tyre Condition (CE)", "tyreConditionCe", _tyreConditionCeController),
-            tf("Attachment Condition", "attachmentCondition", _attachmentConditionController),
-            tf("Rock Breaker", "rockBreaker", _rockBreakerController),
-            tf("Implement Attachments", "implementAttachments", _implementAttachmentsController),
-            tf("Front Tyre Condition", "frontTyreCondition", _frontTyreConditionController),
-            tf("Rear Tyre Condition", "rearTyreCondition", _rearTyreConditionController),
-            tf("Rear Drawbar", "rearDrawbar", _rearDrawbarController),
-          ]),
+        // ── SYSTEM INSPECTION — registry-driven per vehicle type ─────────────
+        ...[
+          for (final section in _registrySections)
+            _buildSectionContainer(section.section, [
+              for (final field in section.fields)
+                _buildRegistryField(field, canEdit),
+            ]),
+        ],
 
         // ── PAYMENT & REMARKS ───────────────────────────────────────────────
         _buildSectionContainer("Payment Collection", [
