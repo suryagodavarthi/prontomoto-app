@@ -45,16 +45,81 @@ const List<String> conditionOptions = [
 ];
 const List<String> yesNoOptions = ['YES', 'NO'];
 
-// Page-1 Condition Verdict labels per vehicle type
-const Map<VehicleTypeKey, List<String>> verdictSections = {
-  VehicleTypeKey.cv:   ['ENGINE', 'CABIN', 'LOAD BODY', 'OTHER SYSTEMS'],
-  VehicleTypeKey.fw:   ['ENGINE', 'EXTERIOR', 'INTERIOR', 'OTHER SYSTEMS'],
-  VehicleTypeKey.tw:   ['ENGINE', 'EXTERIOR', 'BODY', 'OTHER SYSTEMS'],
-  VehicleTypeKey.thrw: ['ENGINE', 'CABIN', 'LOAD BODY', 'OTHER SYSTEMS'],
-  VehicleTypeKey.ce:   ['ENGINE', 'CABIN', 'ATTACHMENTS', 'OTHER SYSTEMS'],
-  VehicleTypeKey.bus:  ['ENGINE', 'COACH', 'BODY ASSY', 'OTHER SYSTEMS'],
-  VehicleTypeKey.fe:   ['ENGINE', 'CABIN', 'BODY ASSY', 'OTHER SYSTEMS'],
-};
+// ─── Categories ────────────────────────────────────────────────────────────
+// The four systems the report's cover rates. A VIEW over the sections below, not
+// a replacement: the inspection form still collects all of them, and the saved
+// shape is unchanged.
+//
+// This replaces verdictSections, which listed four per-vehicle-type verdict
+// labels (ENGINE / CABIN / LOAD BODY / OTHER SYSTEMS). Those named the banded
+// verdict boxes on an older cover; the cover has been redesigned twice since and
+// nothing referenced the map any more.
+//
+// Derived from the section NAME, exactly as categoryOf() does in the portal's
+// inspection-field-registry.ts and CategoryOf() in ProntoPDFGeneration's
+// PdfReportService.Cover.cs. Three copies of one rule — change them together.
+
+enum InspectionCategoryKey { mechanical, structural, electrical, tyres }
+
+class InspectionCategory {
+  final InspectionCategoryKey key;
+
+  /// As the checklist page heads it.
+  final String title;
+
+  /// As the cover tile labels it.
+  final String tileTitle;
+
+  const InspectionCategory({
+    required this.key,
+    required this.title,
+    required this.tileTitle,
+  });
+}
+
+/// In the order the report prints them.
+const List<InspectionCategory> inspectionCategories = [
+  InspectionCategory(
+      key: InspectionCategoryKey.mechanical,
+      title: 'MECHANICAL',
+      tileTitle: 'MECHANICAL SYSTEMS'),
+  InspectionCategory(
+      key: InspectionCategoryKey.structural,
+      title: 'STRUCTURAL',
+      tileTitle: 'STRUCTURAL SYSTEMS'),
+  InspectionCategory(
+      key: InspectionCategoryKey.electrical,
+      title: 'ELECTRICAL',
+      tileTitle: 'ELECTRICAL'),
+  InspectionCategory(
+      key: InspectionCategoryKey.tyres,
+      title: 'TYRES',
+      tileTitle: 'TYRES'),
+];
+
+/// Which category a section belongs to, or null when it is listed but never rated.
+///
+/// FUNCTIONALITY and OTHER SYSTEMS return null: the report captions the tiles as
+/// ratings, and a section it does not score has no rating to show. Anything
+/// unrecognised falls to structural, which is where the body, cabin and
+/// attachment sections differ by vehicle type.
+InspectionCategoryKey? categoryOf(String sectionName) {
+  final n = sectionName.trim().toUpperCase();
+  if (n == 'FUNCTIONALITY' || n == 'OTHER SYSTEMS') return null;
+  if (n == 'ELECTRICAL SYSTEM') return InspectionCategoryKey.electrical;
+  if (n.startsWith('TIRE') || n.startsWith('TYRE')) return InspectionCategoryKey.tyres;
+  if (const {
+    'ENGINE CONDITION',
+    'TRANSMISSION SYSTEM',
+    'BRAKES',
+    'STEERING SYSTEM',
+    'SUSPENSION SYSTEM',
+    'HYDRAULIC SYSTEM',
+  }.contains(n)) {
+    return InspectionCategoryKey.mechanical;
+  }
+  return InspectionCategoryKey.structural;
+}
 
 VehicleTypeKey? normalizeVehicleType(String? raw) {
   if (raw == null || raw.isEmpty) return null;
