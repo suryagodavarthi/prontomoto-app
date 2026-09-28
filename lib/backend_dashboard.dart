@@ -7,6 +7,9 @@ import 'main.dart';
 import 'avo_dashboard.dart';
 import 'qc_dashboard.dart';
 import 'finalreport_dashboard.dart';
+import 'dashboard_common.dart';
+import 'case_history_page.dart';
+import 'duplicate_check.dart';
 
 class BackendDashboard extends StatefulWidget {
   final String userName;
@@ -17,9 +20,10 @@ class BackendDashboard extends StatefulWidget {
 }
 
 class _BackendDashboardState extends State<BackendDashboard> {
-  final ApiService api = ApiService();
   List<dynamic> _allCases = [];
+  List<dynamic> _completedCases = [];
   List<dynamic> _cases = [];
+  DashboardData? _dashData;
   bool _isLoading = true;
   String _selectedSubTab = "All";
 
@@ -32,16 +36,15 @@ class _BackendDashboardState extends State<BackendDashboard> {
   void _loadDashboardData() async {
     setState(() => _isLoading = true);
     try {
-      final all = await api.getOpenValuations();
-      all.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
-      // Filter to Backend step only
-      final filtered = all.where((c) {
+      final data = await loadDashboardData(stepMatcher: (c) {
         final wf = (c['workflow'] ?? "").toString().toLowerCase();
         return wf.contains("backend");
-      }).toList();
+      });
       if (mounted) {
         setState(() {
-          _allCases = filtered;
+          _dashData = data;
+          _allCases = data.openCases;
+          _completedCases = data.completedCases;
           _isLoading = false;
         });
         _applySubTab();
@@ -58,7 +61,9 @@ class _BackendDashboardState extends State<BackendDashboard> {
 
   void _applySubTab() {
     List<dynamic> filtered;
-    if (_selectedSubTab == "Returned") {
+    if (_selectedSubTab == "Completed") {
+      filtered = List.from(_completedCases);
+    } else if (_selectedSubTab == "Returned") {
       filtered = _allCases.where((c) {
         final s = (c['status'] ?? "").toString().toLowerCase();
         return s.contains("return");
@@ -105,6 +110,7 @@ class _BackendDashboardState extends State<BackendDashboard> {
       ),
       body: Column(
         children: [
+          if (_dashData != null) DashboardStatsHeader(data: _dashData!, color: Colors.green),
           Container(
             height: 50,
             padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -116,6 +122,8 @@ class _BackendDashboardState extends State<BackendDashboard> {
                 _buildTabChip("Pending", _allCases.where((c) => !(c['status'] ?? "").toString().toLowerCase().contains("return")).length),
                 const SizedBox(width: 8),
                 _buildTabChip("Returned", _allCases.where((c) => (c['status'] ?? "").toString().toLowerCase().contains("return")).length),
+                const SizedBox(width: 8),
+                _buildTabChip("Completed", _completedCases.length),
               ],
             ),
           ),
@@ -631,11 +639,20 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
       if (!mounted) return;
 
       if (isSubmit) {
-        await api.assignBackendTask(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, _selectedAssignee!); 
-        
+        await api.assignBackendTask(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, _selectedAssignee!);
+
         // FIX: The stepOrder is pulled from outer scope and the invalid assignee param is removed
         var advanceResult = await api.advanceToNextStage(ctx["id"]!, stepOrder, ctx["vNo"]!, ctx["contact"]!);
-        
+        await api.addWorkflowHistory(
+          valuationId: ctx["id"]!,
+          action: "Backend Submitted to AVO",
+          remarks: "Assigned to ${_selectedAssignee ?? '-'}",
+          performedByUserId: currentUserId,
+          performedByUserName: currentUserName,
+          statusFrom: "Backend",
+          statusTo: "AVO",
+        );
+
         if (mounted) {
           setState(() { _isSaving = false; _isSubmitting = false; });
           if (advanceResult["success"] == true) {
@@ -661,6 +678,20 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("App Error: $e"), backgroundColor: Colors.red));
       }
     }
+  }
+
+  /// Mirrors the portal's workflow-buttons "Check Duplicates": searches by
+  /// vehicle, engine and chassis number, excluding this case itself.
+  Future<void> _checkDuplicates() async {
+    final ctx = _getSafeContext();
+    await checkDuplicatesAndConfirm(
+      context,
+      vehicleNumber: ctx["vNo"],
+      engineNumber: _engineNoController.text,
+      chassisNumber: _chassisNoController.text,
+      excludeId: ctx["id"],
+      confirmMode: false,
+    );
   }
 
   Future<void> _handleReject() async {
@@ -710,6 +741,16 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
       setState(() => _isRejecting = false);
 
       if (rejectResult["success"] == true) {
+        await api.addWorkflowHistory(
+          valuationId: ctx["id"]!,
+          action: "Backend Rejected to Stakeholder",
+          remarks: reason.isNotEmpty ? reason : "Rejected from Backend review",
+          performedByUserId: currentUserId,
+          performedByUserName: currentUserName,
+          statusFrom: "Backend",
+          statusTo: "Stakeholder",
+        );
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Rejected back to Stakeholder!"), backgroundColor: Colors.orange));
         Navigator.pop(context);
       } else {
@@ -961,7 +1002,24 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
-      appBar: AppBar(title: const Text("Backend Verification", style: TextStyle(color: Colors.black)), backgroundColor: Colors.white, elevation: 0, iconTheme: const IconThemeData(color: Colors.black)),
+      appBar: AppBar(
+        title: const Text("Backend Verification", style: TextStyle(color: Colors.black)),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.black),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.content_copy, color: Colors.deepOrange),
+            tooltip: "Check Duplicates",
+            onPressed: _checkDuplicates,
+          ),
+          IconButton(
+            icon: const Icon(Icons.history, color: Colors.teal),
+            tooltip: "Case History",
+            onPressed: () => showCaseHistory(context, _getSafeContext()["id"]!),
+          ),
+        ],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(

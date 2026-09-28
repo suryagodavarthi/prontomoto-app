@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'services/location_service.dart';
+import 'services/photo_stamp_service.dart';
+
 // ---------------------------------------------------------------------------
 // Silhouette type mapping
 // ---------------------------------------------------------------------------
@@ -62,6 +65,11 @@ class CustomCameraPage extends StatefulWidget {
     this.isVideo = false,
   });
 
+  /// Location + time stamped onto the most recent photo, read by the media
+  /// page after capture to save the photo's metadata alongside the upload.
+  static WatermarkLocation? lastStampLocation;
+  static DateTime? lastStampTime;
+
   @override
   State<CustomCameraPage> createState() => _CustomCameraPageState();
 }
@@ -78,12 +86,23 @@ class _CustomCameraPageState extends State<CustomCameraPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Landscape-only so every photo is native 4:3 with nothing lost —
+    // same behavior as the Vehga camera app.
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     _initCamera();
+    // Warm the GPS + geocoder cache so capture doesn't wait for a fix.
+    if (!widget.isVideo) {
+      LocationService.get().catchError((_) => WatermarkLocation(latitude: 0, longitude: 0));
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     _ctrl?.dispose();
     super.dispose();
   }
@@ -155,7 +174,26 @@ class _CustomCameraPageState extends State<CustomCameraPage>
     try {
       final file = await _ctrl!.takePicture();
       final bytes = await file.readAsBytes();
-      if (mounted) Navigator.pop(context, bytes);
+
+      // Stamp like the Vehga camera app: logo + date/time + address, and
+      // letterbox to 4:3. If GPS fails the photo still goes through with a
+      // date-only stamp — capture must never be lost.
+      WatermarkLocation? location;
+      try {
+        location = await LocationService.get();
+      } catch (e) {
+        if (mounted) _showSnack("No GPS fix — photo stamped without location. $e");
+      }
+      final timestamp = DateTime.now();
+      final stamped = await PhotoStampService.apply(
+        photoBytes: bytes,
+        location: location,
+        timestamp: timestamp,
+      );
+      CustomCameraPage.lastStampLocation = location;
+      CustomCameraPage.lastStampTime = timestamp;
+
+      if (mounted) Navigator.pop(context, stamped);
     } catch (e) {
       if (mounted) {
         _showSnack("Capture failed: $e");

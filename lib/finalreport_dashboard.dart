@@ -7,6 +7,8 @@ import 'services/api_service.dart';
 import 'main.dart';
 import 'avo_dashboard.dart';
 import 'qc_dashboard.dart';
+import 'dashboard_common.dart';
+import 'case_history_page.dart';
 
 // =============================================================================
 // FINAL REPORT DASHBOARD — list of cases in FinalReport step (step 5)
@@ -21,10 +23,11 @@ class FinalReportDashboard extends StatefulWidget {
 }
 
 class _FinalReportDashboardState extends State<FinalReportDashboard> {
-  final ApiService _api = ApiService();
   bool _isLoading = true;
   List<dynamic> _allCases = [];
+  List<dynamic> _completedCases = [];
   List<dynamic> _cases = [];
+  DashboardData? _dashData;
   String _selectedSubTab = "All";
 
   @override
@@ -36,13 +39,13 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
-      final all = await _api.getOpenValuations();
-      all.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
-
-      // Admin sees ALL cases across every stage
+      // FinalReport/admin view spans every stage — no step matcher.
+      final data = await loadDashboardData();
       if (mounted) {
         setState(() {
-          _allCases = all;
+          _dashData = data;
+          _allCases = data.openCases;
+          _completedCases = data.completedCases;
           _isLoading = false;
         });
         _applySubTab();
@@ -59,7 +62,9 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
 
   void _applySubTab() {
     List<dynamic> filtered;
-    if (_selectedSubTab == "All") {
+    if (_selectedSubTab == "Completed") {
+      filtered = List.from(_completedCases);
+    } else if (_selectedSubTab == "All") {
       filtered = List.from(_allCases);
     } else {
       filtered = _allCases.where((c) {
@@ -144,6 +149,7 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
       ),
       body: Column(
         children: [
+          if (_dashData != null) DashboardStatsHeader(data: _dashData!, color: Colors.teal),
           Container(
             height: 50,
             padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -161,6 +167,8 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
                 _buildSubTabChip("QC", _stageCount("QC")),
                 const SizedBox(width: 8),
                 _buildSubTabChip("FinalReport", _stageCount("FinalReport")),
+                const SizedBox(width: 8),
+                _buildSubTabChip("Completed", _completedCases.length),
               ],
             ),
           ),
@@ -555,6 +563,17 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
         ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, completedBy, phone, email, phone);
     if (!mounted) return;
 
+    await api.addWorkflowHistory(
+      valuationId: ctx["id"]!,
+      action: "Valuation Completed",
+      remarks: "Final report approved by $completedBy",
+      performedByUserId: currentUserId,
+      performedByUserName: currentUserName,
+      statusFrom: "FinalReport",
+      statusTo: "Completed",
+    );
+    if (!mounted) return;
+
     setState(() => _isCompleting = false);
     _showSuccess("Valuation completed successfully! ✓");
     Navigator.pop(context);
@@ -595,6 +614,16 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
     if (!mounted) return;
 
     if (res['success'] == true) {
+      await api.addWorkflowHistory(
+        valuationId: ctx["id"]!,
+        action: "FinalReport Returned to QC",
+        remarks: reason,
+        performedByUserId: currentUserId,
+        performedByUserName: currentUserName,
+        statusFrom: "FinalReport",
+        statusTo: "QC",
+      );
+      if (!mounted) return;
       setState(() => _isReturning = false);
       _showSuccess("Case returned to Quality Control");
       Navigator.pop(context);
@@ -623,14 +652,17 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
   // PDF DOWNLOAD
   // ---------------------------------------------------------------------------
   Future<void> _downloadPdf() async {
-    final valuationId = widget.summaryData['valuationId']?.toString() ?? "";
+    final ctx = _ctx();
+    final valuationId = ctx["id"] ?? "";
     if (valuationId.isEmpty) {
       _showError("Valuation ID not available for PDF generation.");
       return;
     }
-    final vehicleNumber = widget.summaryData['vehicleNumber']?.toString() ?? "";
-    final applicantContact = widget.summaryData['applicantContact']?.toString() ?? "";
-    if (vehicleNumber.isEmpty || applicantContact.isEmpty) {
+    // _ctx() fills in placeholders when these are missing, and the report
+    // service cannot find a case from those, so stop instead of asking for one.
+    final vehicleNumber = ctx["vNo"]!;
+    final applicantContact = ctx["contact"]!;
+    if (vehicleNumber == "UNKNOWN" || applicantContact == "0000000000") {
       _showError("Vehicle number or applicant contact missing for this case.");
       return;
     }
@@ -994,6 +1026,11 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
         elevation: 1,
         iconTheme: const IconThemeData(color: Colors.black),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.history, color: Colors.teal),
+            tooltip: "Case History",
+            onPressed: () => showCaseHistory(context, _ctx()["id"]!),
+          ),
           IconButton(
             icon: const Icon(Icons.picture_as_pdf, color: Colors.teal),
             tooltip: "Download PDF",

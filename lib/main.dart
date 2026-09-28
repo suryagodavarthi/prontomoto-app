@@ -12,11 +12,18 @@ import 'avo_dashboard.dart';
 import 'qc_dashboard.dart';
 import 'finalreport_dashboard.dart';
 import 'firebase_options.dart';
+import 'duplicate_check.dart';
+import 'dashboard_common.dart';
+import 'case_history_page.dart';
 
 // ── Role-Based Access Control ─────────────────────────────────────────────────
 // Set once at login; read by all dashboards and case-detail pages.
 String currentUserRole = '';
 int currentUserRoleLevel = 1; // 1=Stakeholder 2=Backend 3=AVO 4=QC 5=FinalReport
+String currentUserPhone = ''; // full +91 phone; userId in the backend Users table
+String currentUserId = '';    // backend userId, used for history logging
+String currentUserName = '';
+List<String> currentUserRoles = []; // all roles from /users/{phone}/roles
 
 int roleLevelOf(String roleId) {
   final r = roleId.toLowerCase();
@@ -45,6 +52,37 @@ int roleLevelOf(String roleId) {
       if (r.contains('backend')) return 2;
       return 1;
   }
+}
+
+// ── Case option lists (keep in sync with portal stakeholder-new) ─────────────
+// Valuation Type is Retail/Repo; the vehicle class moved to Vehicle Segment,
+// stored as kebab-case values with display labels.
+const List<String> valuationTypeOptions = ['Retail', 'Repo'];
+
+const Map<String, String> vehicleSegmentOptions = {
+  'four-wheeler': 'Four Wheeler',
+  'cv': 'Commercial Vehicle',
+  'two-wheeler': 'Two Wheeler',
+  'three-wheeler': 'Three Wheeler',
+  'tractor': 'Tractor',
+  'ce': 'Construction Equipment',
+};
+
+/// Display label for a stored segment value; tolerates old records that
+/// stored the label itself.
+String vehicleSegmentLabelOf(String stored) {
+  if (stored.isEmpty) return '';
+  return vehicleSegmentOptions[stored.toLowerCase()] ?? stored;
+}
+
+/// Stored (kebab-case) value for a display label; passes through unknown text.
+String vehicleSegmentValueOf(String label) {
+  for (final e in vehicleSegmentOptions.entries) {
+    if (e.value.toLowerCase() == label.toLowerCase() || e.key == label.toLowerCase()) {
+      return e.key;
+    }
+  }
+  return label;
 }
 
 int workflowLevelOf(String workflow) {
@@ -215,14 +253,33 @@ class _LoginPageState extends State<LoginPage> {
         : (phone.startsWith('+') ? phone : '+91$phone');
 
     ApiService api = ApiService();
-    var result = await api.loginUser(lookupPhone);
+
+    // Portal parity: user docs are keyed by the full phone number, so look the
+    // user up directly and fetch all assigned roles (multi-role support).
+    String roleId = '';
+    String name = '';
+    String userId = '';
+    List<String> roles = [];
+
+    final userDoc = await api.getUserById(lookupPhone);
+    if (userDoc.isNotEmpty) {
+      roleId = (userDoc['roleId'] ?? '').toString().toLowerCase();
+      name = (userDoc['name'] ?? '').toString();
+      userId = (userDoc['userId'] ?? lookupPhone).toString();
+      roles = await api.getUserRoles(lookupPhone);
+    } else {
+      // Fallback: legacy /users/all lookup (older user docs / different keying).
+      var result = await api.loginUser(lookupPhone);
+      if (result["success"] == true) {
+        roleId = result["role"].toString().toLowerCase();
+        name = result["name"].toString();
+        userId = result["id"].toString();
+      }
+    }
+
     setState(() => _isLoading = false);
 
-    if (result["success"] == true) {
-      // roleId comes directly from the backend user document — no name-guessing
-      final String roleId = result["role"].toString().toLowerCase();
-      final String name = result["name"].toString();
-
+    if (roleId.isNotEmpty || roles.isNotEmpty) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('saved_phone', lookupPhone);
       await prefs.setString('saved_name', name);
@@ -230,9 +287,20 @@ class _LoginPageState extends State<LoginPage> {
 
       if (!mounted) return;
 
-      // Set global role level used for access control across all pages
+      // Set globals used for access control and history logging across pages.
+      // Level is the max across the primary roleId and all assigned roles, so
+      // multi-role users (e.g. QC + FinalReport) land on their highest dashboard.
       currentUserRole = roleId;
-      currentUserRoleLevel = roleLevelOf(roleId);
+      currentUserRoles = roles;
+      currentUserPhone = lookupPhone;
+      currentUserId = userId.isNotEmpty ? userId : lookupPhone;
+      currentUserName = name;
+      int level = roleId.isNotEmpty ? roleLevelOf(roleId) : 1;
+      for (final r in roles) {
+        final l = roleLevelOf(r);
+        if (l > level) level = l;
+      }
+      currentUserRoleLevel = level;
 
       // Route by computed level — inherits fuzzy matching from roleLevelOf.
       // backend/superadmin/stateadmin are kept on BackendDashboard even at level 5.
@@ -257,7 +325,7 @@ class _LoginPageState extends State<LoginPage> {
             MaterialPageRoute(builder: (context) => StakeholderDashboard(userName: name)));
       }
     } else {
-      _showSnack(result["message"] ?? "Login Failed", Colors.red);
+      _showSnack("Phone number not registered. Contact your administrator.", Colors.red);
       _auth.signOut();
     }
   }
@@ -338,10 +406,11 @@ class StakeholderDashboard extends StatefulWidget {
 }
 
 class _StakeholderDashboardState extends State<StakeholderDashboard> {
-  final ApiService _api = ApiService();
   bool _isLoading = true;
   List<dynamic> _allCases = [];
+  List<dynamic> _completedCases = [];
   List<dynamic> _cases = [];
+  DashboardData? _dashData;
   String _selectedSubTab = "All";
 
   @override
@@ -353,16 +422,15 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
   Future<void> _loadDashboardData() async {
     setState(() => _isLoading = true);
     try {
-      final all = await _api.getOpenValuations();
-      all.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
-      // Filter to Stakeholder step only
-      final filtered = all.where((c) {
+      final data = await loadDashboardData(stepMatcher: (c) {
         final wf = (c['workflow'] ?? "").toString().toLowerCase();
         return wf.contains("stakeholder");
-      }).toList();
+      });
       if (mounted) {
         setState(() {
-          _allCases = filtered;
+          _dashData = data;
+          _allCases = data.openCases;
+          _completedCases = data.completedCases;
           _isLoading = false;
         });
         _applySubTab();
@@ -379,7 +447,9 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
 
   void _applySubTab() {
     List<dynamic> filtered;
-    if (_selectedSubTab == "Returned") {
+    if (_selectedSubTab == "Completed") {
+      filtered = List.from(_completedCases);
+    } else if (_selectedSubTab == "Returned") {
       filtered = _allCases.where((c) {
         final s = (c['status'] ?? "").toString().toLowerCase();
         return s.contains("return");
@@ -424,6 +494,7 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
       ),
       body: Column(
         children: [
+          if (_dashData != null) DashboardStatsHeader(data: _dashData!),
           Container(
             height: 50,
             padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -435,6 +506,8 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
                 _buildTabChip("Pending", _allCases.where((c) => !(c['status'] ?? "").toString().toLowerCase().contains("return")).length),
                 const SizedBox(width: 8),
                 _buildTabChip("Returned", _allCases.where((c) => (c['status'] ?? "").toString().toLowerCase().contains("return")).length),
+                const SizedBox(width: 8),
+                _buildTabChip("Completed", _completedCases.length),
               ],
             ),
           ),
@@ -612,6 +685,7 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
   final _whatsappController = TextEditingController();
   final _emailController = TextEditingController();
   final _stakeholderNameController = TextEditingController();
+  final _branchController = TextEditingController();
   final _locationController = TextEditingController();
   final _cityController = TextEditingController();
   final _districtController = TextEditingController();
@@ -620,10 +694,11 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
   final _countryController = TextEditingController(text: "India");
   final _applicantNameController = TextEditingController();
   final _applicantContactController = TextEditingController();
+  final _applicantAltContactController = TextEditingController();
   final _remarksController = TextEditingController();
   final _vehicleNoController = TextEditingController();
   final _vehicleSegmentController = TextEditingController();
-  final _valuationTypeController = TextEditingController(); 
+  final _valuationTypeController = TextEditingController();
 
   String? _selectedStakeholder;
   String? _selectedValuationType;
@@ -641,7 +716,9 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
     "Muthoot Capital Services", "Cholamandalam Investment and Finance Company",
     "Sundaram Finance", "Manappuram Finance", "L&T Finance"
   ];
-  final List<String> _valuationTypes = ["Four Wheeler", "Commercial Vehicle", "Two Wheeler", "Three Wheeler", "Tractor", "Construction Equipment"];
+  final List<String> _valuationTypes = valuationTypeOptions;
+  final List<String> _vehicleSegments = vehicleSegmentOptions.values.toList();
+  String? _selectedVehicleSegment;
 
   @override
   void initState() {
@@ -661,6 +738,7 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
     _whatsappController.dispose();
     _emailController.dispose();
     _stakeholderNameController.dispose();
+    _branchController.dispose();
     _locationController.dispose();
     _cityController.dispose();
     _districtController.dispose();
@@ -669,6 +747,7 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
     _countryController.dispose();
     _applicantNameController.dispose();
     _applicantContactController.dispose();
+    _applicantAltContactController.dispose();
     _remarksController.dispose();
     _vehicleNoController.dispose();
     _vehicleSegmentController.dispose();
@@ -722,14 +801,27 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
     }
     setState(() => _isLoading = true);
     
+    // Warn about duplicate vehicles before creating (portal parity).
+    final proceed = await checkDuplicatesAndConfirm(
+      context,
+      vehicleNumber: _vehicleNoController.text,
+      confirmMode: true,
+    );
+    if (!proceed) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
     Map<String, String> formData = {
       "Name": _selectedStakeholder ?? _stakeholderNameController.text,
+      "Branch": _branchController.text,
       "ExecutiveName": _executiveNameController.text,
       "ExecutiveContact": _contactController.text,
       "ExecutiveWhatsapp": _whatsappController.text,
       "ExecutiveEmail": _emailController.text,
       "ValuationType": _selectedValuationType ?? _valuationTypeController.text,
-      "VehicleSegment": _vehicleSegmentController.text,
+      // Stored kebab-case (e.g. "four-wheeler"), matching the portal.
+      "VehicleSegment": vehicleSegmentValueOf(_selectedVehicleSegment ?? _vehicleSegmentController.text),
       "LocationName": _selectedLocation ?? _locationController.text,
       "Block": _cityController.text,
       "District": _districtController.text,
@@ -750,8 +842,17 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
 
     if (result["success"] == true) {
       String newId = result["id"].toString();
-      
+
       await api.startInitialWorkflow(newId, _vehicleNoController.text, _applicantContactController.text);
+      await api.addWorkflowHistory(
+        valuationId: newId,
+        action: exitPage ? "Case Created & Submitted" : "Case Created (Draft)",
+        remarks: "Vehicle ${_vehicleNoController.text}",
+        performedByUserId: currentUserId,
+        performedByUserName: currentUserName,
+        statusFrom: null,
+        statusTo: exitPage ? "Backend" : "Stakeholder",
+      );
 
       if (exitPage) {
         var advanced = await api.advanceToNextStage(newId, 1, _vehicleNoController.text, _applicantContactController.text);
@@ -803,6 +904,8 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
                   isOpen: true,
                   children: [
                     _buildDropdown("Name of Stakeholder*", _stakeholderList, _selectedStakeholder, (val) => setState(() => _selectedStakeholder = val)),
+                    const SizedBox(height: 10),
+                    _buildTextField("Branch", _branchController),
                     const SizedBox(height: 10),
                     _buildTextField("Executive Name*", _executiveNameController, isRequired: true),
                     const SizedBox(height: 10),
@@ -857,6 +960,8 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
                       const SizedBox(width: 10),
                       Expanded(child: _buildTextField("Applicant Contact*", _applicantContactController, inputType: TextInputType.phone, isRequired: true)),
                     ]),
+                    const SizedBox(height: 10),
+                    _buildTextField("Alternative Contact", _applicantAltContactController, inputType: TextInputType.phone),
                   ]
                ),
 
@@ -874,11 +979,9 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
                _buildAccordionSection(
                   title: "Vehicle Details",
                   children: [
-                    Row(children: [
-                      Expanded(child: _buildTextField("Vehicle Number*", _vehicleNoController, isRequired: true)),
-                      const SizedBox(width: 10),
-                      Expanded(child: _buildTextField("Vehicle Segment", _vehicleSegmentController)),
-                    ]),
+                    _buildTextField("Vehicle Number*", _vehicleNoController, isRequired: true),
+                    const SizedBox(height: 10),
+                    _buildDropdown("Vehicle Segment*", _vehicleSegments, _selectedVehicleSegment, (val) => setState(() => _selectedVehicleSegment = val)),
                   ]
                ),
 
@@ -1053,7 +1156,9 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
     "Muthoot Capital Services", "Cholamandalam Investment and Finance Company", 
     "Sundaram Finance", "Manappuram Finance", "L&T Finance"
   ];
-  final List<String> _valuationTypes = ["Four Wheeler", "Commercial Vehicle", "Two Wheeler", "Three Wheeler", "Tractor", "Construction Equipment"];
+  final List<String> _valuationTypes = valuationTypeOptions;
+  final List<String> _vehicleSegments = vehicleSegmentOptions.values.toList();
+  String? _selectedVehicleSegment;
   
   List<dynamic> _pincodeLocations = []; 
   List<String> _locationNames = []; 
@@ -1074,12 +1179,14 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
   final _stateController = TextEditingController(); 
   final _countryController = TextEditingController();
   
-  final _applicantNameController = TextEditingController(); 
-  final _applicantContactController = TextEditingController(); 
+  final _applicantNameController = TextEditingController();
+  final _applicantContactController = TextEditingController();
+  final _applicantAltContactController = TextEditingController();
   final _remarksController = TextEditingController();
-  
-  final _vehicleNoController = TextEditingController(); 
+
+  final _vehicleNoController = TextEditingController();
   final _vehicleSegmentController = TextEditingController();
+  final _branchController = TextEditingController();
 
   @override
   void initState() {
@@ -1107,9 +1214,11 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
     _countryController.dispose();
     _applicantNameController.dispose();
     _applicantContactController.dispose();
+    _applicantAltContactController.dispose();
     _remarksController.dispose();
     _vehicleNoController.dispose();
     _vehicleSegmentController.dispose();
+    _branchController.dispose();
     super.dispose();
   }
 
@@ -1162,10 +1271,14 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
     
     _applicantNameController.text = _getUniversalValue(d, ['ApplicantName', 'applicantName', 'applicant.name']);
     _applicantContactController.text = _getUniversalValue(d, ['ApplicantContact', 'applicantContact', 'applicant.contact']);
+    _applicantAltContactController.text = _getUniversalValue(d, ['ApplicantAlternativeContact', 'applicantAlternativeContact', 'applicant.alternativeContact']);
     _remarksController.text = _getUniversalValue(d, ['Remarks', 'remarks']);
-    
+
     _vehicleNoController.text = _getUniversalValue(d, ['VehicleNumber', 'vehicleNumber']);
-    _vehicleSegmentController.text = _getUniversalValue(d, ['VehicleSegment', 'vehicleSegment']);
+    final segLabel = vehicleSegmentLabelOf(_getUniversalValue(d, ['VehicleSegment', 'vehicleSegment']));
+    _vehicleSegmentController.text = segLabel;
+    if (_vehicleSegments.contains(segLabel)) _selectedVehicleSegment = segLabel;
+    _branchController.text = _getUniversalValue(d, ['Branch', 'branch']);
 
     String currentStakeholder = _getUniversalValue(d, ['Name', 'stakeholderName', 'name', 'stakeholder.name']);
     if (_stakeholderList.contains(currentStakeholder)) _selectedStakeholder = currentStakeholder;
@@ -1301,7 +1414,7 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
       "ExecutiveWhatsapp": _whatsappController.text,
       "ExecutiveEmail": _emailController.text,
       "ValuationType": _selectedValuationType ?? _getUniversalValue(d, ['ValuationType', 'valuationType']),
-      "VehicleSegment": _vehicleSegmentController.text,
+      "VehicleSegment": vehicleSegmentValueOf(_selectedVehicleSegment ?? _vehicleSegmentController.text),
       "LocationName": _locationController.text, 
       "Block": _blockController.text,
       "District": _districtController.text,
@@ -1310,6 +1423,8 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
       "Country": _countryController.text,
       "ApplicantName": _applicantNameController.text,
       "ApplicantContact": _applicantContactController.text,
+      "ApplicantAlternativeContact": _applicantAltContactController.text,
+      "Branch": _branchController.text,
       "Remarks": _remarksController.text,
       "VehicleNumber": _vehicleNoController.text,
       "Pincode": _pincodeController.text,
@@ -1342,6 +1457,15 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
         await api.startInitialWorkflow(id, vNo, contact);
 
         var advanceResult = await api.advanceToNextStage(id, stepOrder, vNo, contact);
+        await api.addWorkflowHistory(
+          valuationId: id,
+          action: "Stakeholder Submitted",
+          remarks: "Vehicle $vNo",
+          performedByUserId: currentUserId,
+          performedByUserName: currentUserName,
+          statusFrom: "Stakeholder",
+          statusTo: "Backend",
+        );
         
         if (!mounted) return;
         setState(() { _isSavingDraft = false; _isSubmitting = false; });
@@ -1487,7 +1611,19 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
-      appBar: AppBar(title: const Text("Valuation Details", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)), backgroundColor: Colors.white, elevation: 0, iconTheme: const IconThemeData(color: Colors.black)),
+      appBar: AppBar(
+        title: const Text("Valuation Details", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.black),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history, color: Colors.teal),
+            tooltip: "Case History",
+            onPressed: () => showCaseHistory(context, widget.summaryData['valuationId'] ?? widget.summaryData['id'] ?? ""),
+          ),
+        ],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -1556,6 +1692,7 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
 
             _buildSection(title: "Stakeholder", isOpen: true, children: [
                if (_isEditing) _buildDropdown("Name of Stakeholder", _stakeholderList, _selectedStakeholder, (val) => setState(() => _selectedStakeholder = val), isMandatory: true) else _buildField("Name of Stakeholder", _getUniversalValue(d, ['Name', 'stakeholderName', 'name']), null, isMandatory: true),
+               _buildField("Branch", "", _branchController),
                _buildField("Executive Name", "", _executiveNameController, isMandatory: true),
                _buildField("Contact Number", "", _contactController, isMandatory: true),
                
@@ -1583,10 +1720,17 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
             ]),
             const SizedBox(height: 10),
 
-            _buildSection(title: "Applicant", children: [_buildField("Applicant Name", "", _applicantNameController, isMandatory: true), _buildField("Applicant Contact", "", _applicantContactController, isMandatory: true)]),
+            _buildSection(title: "Applicant", children: [_buildField("Applicant Name", "", _applicantNameController, isMandatory: true), _buildField("Applicant Contact", "", _applicantContactController, isMandatory: true), _buildField("Alternative Contact", "", _applicantAltContactController)]),
             const SizedBox(height: 10),
 
-            _buildSection(title: "Vehicle Details", children: [_buildField("Vehicle Number", "", _vehicleNoController, isMandatory: true), _buildField("Vehicle Segment", "", _vehicleSegmentController, isMandatory: true)]),
+            _buildSection(title: "Vehicle Details", children: [
+              _buildField("Vehicle Number", "", _vehicleNoController, isMandatory: true),
+              if (_isEditing)
+                _buildDropdown("Vehicle Segment", _vehicleSegments, _selectedVehicleSegment,
+                    (val) => setState(() { _selectedVehicleSegment = val; _vehicleSegmentController.text = val ?? ''; }), isMandatory: true)
+              else
+                _buildField("Vehicle Segment", "", _vehicleSegmentController, isMandatory: true),
+            ]),
             const SizedBox(height: 10),
 
             _buildSection(title: "Remarks", children: [_buildField("Remarks", "", _remarksController)]),

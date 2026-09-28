@@ -47,7 +47,23 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
   String _vNo = "";
   String _contact = "";
 
-  Map<String, String> _serverImages = {};
+  final Map<String, String> _serverImages = {};
+
+  /// photoKey → { capturedDate, locationText, annotationNote } from
+  /// GET /photos/metadata (recorded by the camera app / annotation flow).
+  Map<String, dynamic> _metadata = {};
+
+  /// Extra photos uploaded via the Vehga camera app (GET /photos/custom):
+  /// { id, name, photoUrl, dateCaptured, location, annotationNote }.
+  List<dynamic> _customPhotos = [];
+
+  /// Capture time + stamped location per slot, recorded when the in-app
+  /// camera returns and saved as photo metadata after the upload succeeds.
+  final Map<String, Map<String, String?>> _pendingCaptureMeta = {};
+
+  /// Bumped after annotating a custom photo — its URL doesn't change when the
+  /// note is burned in, so renders append this to defeat the image cache.
+  int _customBust = 0;
 
   final Map<String, _MediaFile?> _localFiles = {
     "Front Left Side": null,
@@ -173,6 +189,32 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
     } catch (e) {
       debugPrint("Failed to fetch latest photos: $e");
     }
+    await _fetchPhotoExtras();
+  }
+
+  /// Loads photo metadata (geo/time captions) and camera-app custom photos.
+  Future<void> _fetchPhotoExtras() async {
+    final api = ApiService();
+    final metadata = await api.getPhotosMetadata(widget.valuationId, _vNo, _contact);
+    final custom = await api.getCustomPhotos(widget.valuationId, _vNo, _contact);
+    if (mounted) {
+      setState(() {
+        _metadata = metadata;
+        _customPhotos = custom;
+      });
+    }
+  }
+
+  /// Case-insensitive metadata lookup for a photo slot.
+  Map<String, dynamic>? _metadataFor(String uiKey) {
+    final backendKey = _backendKeys[uiKey];
+    if (backendKey == null) return null;
+    for (final k in _metadata.keys) {
+      if (k.toLowerCase() == backendKey.toLowerCase() && _metadata[k] is Map) {
+        return Map<String, dynamic>.from(_metadata[k]);
+      }
+    }
+    return null;
   }
 
   // ── PHOTO GUIDE DATA ─────────────────────────────────────────────────────
@@ -464,6 +506,12 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
       if (bytes == null || bytes.isEmpty) return;
       final filename =
           '${_backendKeys[key] ?? key}${isVideo ? '.mp4' : '.jpg'}';
+      if (!isVideo) {
+        _pendingCaptureMeta[key] = {
+          'capturedDate': (CustomCameraPage.lastStampTime ?? DateTime.now()).toIso8601String(),
+          'locationText': CustomCameraPage.lastStampLocation?.asText,
+        };
+      }
       setState(() =>
           _localFiles[key] = _MediaFile(name: filename, bytes: bytes));
     } catch (e) {
@@ -541,6 +589,18 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
 
       final response = await request.send();
       if (response.statusCode == 200 || response.statusCode == 204) {
+        // Save the capture time + stamped location for live camera shots
+        // (shown on the portal and in the report). File picks may be older
+        // photos, so no metadata is claimed for them.
+        final meta = _pendingCaptureMeta[uiKey];
+        if (meta != null) {
+          await ApiService().savePhotoMetadata(
+            widget.valuationId, _vNo, _contact, backendKey,
+            capturedDate: meta['capturedDate'],
+            locationText: meta['locationText'],
+          );
+          _pendingCaptureMeta.remove(uiKey);
+        }
         setState(() => _localFiles[uiKey] = null);
         await _fetchLatestPhotosFromServer();
         if (mounted) {
@@ -738,6 +798,27 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
                     right: 4,
                     child: _badge(Icons.cloud_upload, "Pending", Colors.blue),
                   ),
+                // Annotate pencil — uploaded photos only (portal parity)
+                if (hasBackend && !hasLocal && !isVideo)
+                  Positioned(
+                    bottom: 12,
+                    right: 12,
+                    child: InkWell(
+                      onTap: _isSyncing ? null : () => _annotatePhoto(title),
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: BoxDecoration(
+                          color: (_metadataFor(title)?['annotationNote'] ?? '').toString().isNotEmpty &&
+                                  (_metadataFor(title)?['annotationNote']).toString() != 'null'
+                              ? Colors.orange
+                              : Colors.white.withOpacity(0.9),
+                          shape: BoxShape.circle,
+                          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 3)],
+                        ),
+                        child: const Icon(Icons.edit, size: 15, color: Colors.black87),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -751,6 +832,15 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis),
           ),
+          if (_metadataCaption(title) != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4.0),
+              child: Text(_metadataCaption(title)!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 8.5, color: Colors.grey[600]),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis),
+            ),
           const SizedBox(height: 6),
 
           // ── Action buttons ────────────────────────────────────────────
@@ -806,6 +896,235 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
           const SizedBox(height: 8),
         ],
       ),
+    );
+  }
+
+  // ── ANNOTATION (portal's vehicle-image-upload pencil flow) ────────────────
+
+  /// Note dialog shared by fixed-slot and custom-photo annotation.
+  Future<String?> _showAnnotateDialog(String title, String currentNote) {
+    final controller = TextEditingController(text: currentNote);
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text("Annotate — $title", style: const TextStyle(fontSize: 16)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 3,
+          maxLength: 120,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            hintText: "Note to add to this photo (empty to remove)…",
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF007B7B), foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text("Save"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Annotates an uploaded fixed-slot photo. The backend burns the note onto
+  /// the image server-side and returns the (possibly unchanged) URL, so the
+  /// refreshed entry is cache-busted to force a reload.
+  Future<void> _annotatePhoto(String uiKey) async {
+    final backendKey = _backendKeys[uiKey];
+    if (backendKey == null) return;
+
+    final currentNote =
+        (_metadataFor(uiKey)?['annotationNote'] ?? '').toString().replaceAll('null', '');
+    final note = await _showAnnotateDialog(uiKey, currentNote);
+    if (note == null) return;
+
+    setState(() => _isSyncing = true);
+    final res = await ApiService()
+        .annotatePhoto(widget.valuationId, _vNo, _contact, backendKey, note);
+    if (!mounted) return;
+    setState(() => _isSyncing = false);
+
+    if (res != null) {
+      final newUrl = res['photoUrl']?.toString();
+      if (newUrl != null && newUrl.isNotEmpty) {
+        final bust = "$newUrl${newUrl.contains('?') ? '&' : '?'}t=${DateTime.now().millisecondsSinceEpoch}";
+        setState(() {
+          final match = _serverImages.keys.firstWhere(
+              (k) => k.toLowerCase() == backendKey.toLowerCase(),
+              orElse: () => backendKey);
+          _serverImages[match] = bust;
+        });
+      }
+      await _fetchPhotoExtras();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("Annotation saved"), backgroundColor: Colors.green));
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text("Failed to save annotation"), backgroundColor: Colors.red));
+    }
+  }
+
+  /// Annotates a camera-app custom photo (photoKey is the custom photo id).
+  Future<void> _annotateCustomPhoto(Map photo) async {
+    final id = (photo['id'] ?? photo['Id'] ?? '').toString();
+    if (id.isEmpty) return;
+    final name = (photo['name'] ?? photo['Name'] ?? 'Photo').toString();
+    final currentNote =
+        (photo['annotationNote'] ?? photo['AnnotationNote'] ?? '').toString().replaceAll('null', '');
+
+    final note = await _showAnnotateDialog(name, currentNote);
+    if (note == null) return;
+
+    setState(() => _isSyncing = true);
+    final res =
+        await ApiService().annotatePhoto(widget.valuationId, _vNo, _contact, id, note);
+    if (!mounted) return;
+    setState(() => _isSyncing = false);
+
+    if (res != null) {
+      _customBust = DateTime.now().millisecondsSinceEpoch;
+      await _fetchPhotoExtras();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("Annotation saved"), backgroundColor: Colors.green));
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text("Failed to save annotation"), backgroundColor: Colors.red));
+    }
+  }
+
+  /// "12-05-2026 14:30 · Hyderabad" caption from the photo's metadata.
+  String? _metadataCaption(String uiKey) {
+    final md = _metadataFor(uiKey);
+    if (md == null) return null;
+    final parts = <String>[];
+    final captured = (md['capturedDate'] ?? md['CapturedDate'] ?? '').toString();
+    if (captured.isNotEmpty && captured != 'null') {
+      final dt = DateTime.tryParse(captured)?.toLocal();
+      if (dt != null) {
+        String two(int n) => n.toString().padLeft(2, '0');
+        parts.add("${two(dt.day)}-${two(dt.month)}-${dt.year} ${two(dt.hour)}:${two(dt.minute)}");
+      } else {
+        parts.add(captured);
+      }
+    }
+    final loc = (md['locationText'] ?? md['LocationText'] ?? '').toString();
+    if (loc.isNotEmpty && loc != 'null') parts.add(loc);
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
+  // ── CUSTOM PHOTOS (from the Vehga camera app) ─────────────────────────────
+
+  Widget _buildCustomPhotosSection() {
+    if (_customPhotos.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 24),
+        const Divider(),
+        const SizedBox(height: 8),
+        Row(children: [
+          const Icon(Icons.photo_camera_back, size: 18, color: Colors.teal),
+          const SizedBox(width: 6),
+          Text("Camera App Photos (${_customPhotos.length})",
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+        ]),
+        const SizedBox(height: 12),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 220,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 0.8,
+          ),
+          itemCount: _customPhotos.length,
+          itemBuilder: (context, i) {
+            final p = _customPhotos[i];
+            if (p is! Map) return const SizedBox.shrink();
+            String url = (p['photoUrl'] ?? p['PhotoUrl'] ?? '').toString();
+            if (_customBust > 0 && url.startsWith('http')) {
+              url = "$url${url.contains('?') ? '&' : '?'}t=$_customBust";
+            }
+            final name = (p['name'] ?? p['Name'] ?? 'Photo').toString();
+            final date = (p['dateCaptured'] ?? p['DateCaptured'] ?? '').toString();
+            final loc = (p['location'] ?? p['Location'] ?? '').toString();
+            final note = (p['annotationNote'] ?? p['AnnotationNote'] ?? '').toString();
+            return Card(
+              elevation: 1,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+                side: BorderSide(color: Colors.teal.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Stack(children: [
+                      Positioned.fill(
+                        child: ClipRRect(
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+                          child: url.startsWith('http')
+                              ? Image.network(url,
+                                  fit: BoxFit.cover,
+                                  width: double.infinity,
+                                  errorBuilder: (_, __, ___) =>
+                                      const Icon(Icons.broken_image, color: Colors.red, size: 40))
+                              : const Icon(Icons.image_not_supported, color: Colors.grey, size: 40),
+                        ),
+                      ),
+                      Positioned(
+                        bottom: 4,
+                        right: 4,
+                        child: InkWell(
+                          onTap: _isSyncing ? null : () => _annotateCustomPhoto(p),
+                          child: Container(
+                            padding: const EdgeInsets.all(5),
+                            decoration: BoxDecoration(
+                              color: note.isNotEmpty && note != 'null'
+                                  ? Colors.orange
+                                  : Colors.white.withOpacity(0.9),
+                              shape: BoxShape.circle,
+                              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 3)],
+                            ),
+                            child: const Icon(Icons.edit, size: 15, color: Colors.black87),
+                          ),
+                        ),
+                      ),
+                    ]),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(name,
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      if (date.isNotEmpty && date != 'null')
+                        Text(date, style: TextStyle(fontSize: 8.5, color: Colors.grey[600]),
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                      if (loc.isNotEmpty && loc != 'null')
+                        Text(loc, style: TextStyle(fontSize: 8.5, color: Colors.grey[600]),
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                      if (note.isNotEmpty && note != 'null')
+                        Text(note, style: const TextStyle(fontSize: 8.5, color: Colors.orange),
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ]),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ],
     );
   }
 
@@ -928,6 +1247,8 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
                           isVideo: key.contains("Video"));
                     },
                   ),
+
+                  _buildCustomPhotosSection(),
 
                   const SizedBox(height: 20),
                   SizedBox(

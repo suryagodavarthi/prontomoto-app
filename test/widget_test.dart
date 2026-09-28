@@ -1,30 +1,38 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// Unit tests for the role/workflow level mapping that drives dashboard
+// routing and case navigation. (The full app can't be pumped in widget tests
+// because LoginPage requires an initialized Firebase app.)
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:prontomoto_app/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  test('roleLevelOf maps known roles to workflow levels', () {
+    expect(roleLevelOf('stakeholder'), 1);
+    expect(roleLevelOf('CanCreateStakeholder'), 1);
+    expect(roleLevelOf('backend'), 2);
+    expect(roleLevelOf('avo'), 3);
+    expect(roleLevelOf('valuer'), 3);
+    expect(roleLevelOf('qc'), 4);
+    expect(roleLevelOf('CanEditQualityControl'), 4);
+    expect(roleLevelOf('finalreport'), 5);
+    expect(roleLevelOf('superadmin'), 5);
+    expect(roleLevelOf('stateadmin'), 5);
+  });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+  test('roleLevelOf falls back to fuzzy matching for unknown variants', () {
+    expect(roleLevelOf('QualityControl'), 4);
+    expect(roleLevelOf('AvoUser'), 3);
+    expect(roleLevelOf('BackendTeam'), 2);
+    expect(roleLevelOf('somethingelse'), 1);
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  test('workflowLevelOf maps workflow names to levels', () {
+    expect(workflowLevelOf('Stakeholder'), 1);
+    expect(workflowLevelOf('Backend'), 2);
+    expect(workflowLevelOf('AVO'), 3);
+    expect(workflowLevelOf('Inspection'), 3);
+    expect(workflowLevelOf('QualityControl'), 4);
+    expect(workflowLevelOf('FinalReport'), 5);
   });
 }
