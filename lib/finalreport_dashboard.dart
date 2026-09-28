@@ -677,11 +677,13 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
     }).toString();
 
     try {
-      final uri = Uri.parse(url);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        _showError("Could not open PDF. Check your browser settings.");
+      // Ask the browser directly rather than asking canLaunchUrl first: that
+      // check answers "no" whenever the manifest's <queries> misses a scheme,
+      // even with a browser installed, and reports a browser problem that isn't.
+      final opened =
+          await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (!opened) {
+        _showError("No app on this phone could open the report link.");
       }
     } catch (e) {
       _showError("PDF error: $e");
