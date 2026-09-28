@@ -6,6 +6,10 @@ import 'services/api_service.dart';
 import 'main.dart';
 import 'avo_dashboard.dart';
 import 'finalreport_dashboard.dart';
+import 'dashboard_common.dart';
+import 'case_history_page.dart';
+import 'qc_photo_review.dart';
+import 'qc_checklist.dart';
 
 // =============================================================================
 // QC DASHBOARD — list of cases currently in QualityControl step
@@ -20,10 +24,11 @@ class QcDashboard extends StatefulWidget {
 }
 
 class _QcDashboardState extends State<QcDashboard> {
-  final ApiService _api = ApiService();
   bool _isLoading = true;
   List<dynamic> _allCases = [];
+  List<dynamic> _completedCases = [];
   List<dynamic> _cases = [];
+  DashboardData? _dashData;
   String _selectedSubTab = "All";
 
   @override
@@ -35,16 +40,15 @@ class _QcDashboardState extends State<QcDashboard> {
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
-      final all = await _api.getOpenValuations();
-      all.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
-      // Filter to QC step only
-      final filtered = all.where((c) {
+      final data = await loadDashboardData(stepMatcher: (c) {
         final wf = (c['workflow'] ?? "").toString().toLowerCase();
         return wf.contains("qc") || wf.contains("quality");
-      }).toList();
+      });
       if (mounted) {
         setState(() {
-          _allCases = filtered;
+          _dashData = data;
+          _allCases = data.openCases;
+          _completedCases = data.completedCases;
           _isLoading = false;
         });
         _applySubTab();
@@ -61,7 +65,9 @@ class _QcDashboardState extends State<QcDashboard> {
 
   void _applySubTab() {
     List<dynamic> filtered;
-    if (_selectedSubTab == "Returned") {
+    if (_selectedSubTab == "Completed") {
+      filtered = List.from(_completedCases);
+    } else if (_selectedSubTab == "Returned") {
       filtered = _allCases.where((c) {
         final s = (c['status'] ?? "").toString().toLowerCase();
         return s.contains("return");
@@ -134,6 +140,7 @@ class _QcDashboardState extends State<QcDashboard> {
       ),
       body: Column(
         children: [
+          if (_dashData != null) DashboardStatsHeader(data: _dashData!, color: Colors.blueGrey),
           Container(
             height: 50,
             padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -145,6 +152,8 @@ class _QcDashboardState extends State<QcDashboard> {
                 _buildSubTabChip("Pending", pendingCount),
                 const SizedBox(width: 8),
                 _buildSubTabChip("Returned", returnedCount),
+                const SizedBox(width: 8),
+                _buildSubTabChip("Completed", _completedCases.length),
               ],
             ),
           ),
@@ -301,6 +310,10 @@ class _QcDetailPageState extends State<QcDetailPage> {
   final _valuationAmountController = TextEditingController();
   final _qcRemarksController = TextEditingController();
 
+  // QC verification checklist (qcChecklist / qcChecklistRemarks on the QC doc)
+  final Map<String, String?> _cl = {};
+  final Map<String, String> _clRemarks = {};
+
   // Payment controllers
   final List<String> _paymentStatuses = ["Pending", "Completed", "Failed"];
   final List<String> _paymentMethods = ["Online", "Cash", "Card", "UPI"];
@@ -340,6 +353,7 @@ class _QcDetailPageState extends State<QcDetailPage> {
 
         _populateQcFields(qc);
         _populatePaymentFields(payment);
+        _populateChecklist(qc, report);
         _checkReturnStatus(table);
 
         _isLoading = false;
@@ -380,6 +394,32 @@ class _QcDetailPageState extends State<QcDetailPage> {
 
     _valuationAmountController.text = _readStr(data, ['valuationAmount']);
     _qcRemarksController.text = _readStr(data, ['remarks']);
+  }
+
+  /// Prefills the checklist from report data, then overlays previously saved
+  /// values — same order as the portal's loadQualityControl().
+  void _populateChecklist(Map<String, dynamic> qc, Map<String, dynamic> report) {
+    _cl.clear();
+    _clRemarks.clear();
+    prefillQcChecklist(
+      _cl,
+      report: report,
+      overallRating: _selectedOverallCondition ?? '',
+      chassisPunchRaw: _selectedChassisPunch ?? '',
+      valuationAmount: num.tryParse(_valuationAmountController.text) ?? 0,
+    );
+    final saved = qc['qcchecklist'];
+    if (saved is Map) {
+      saved.forEach((k, v) {
+        if (v != null && v.toString() != 'null') _cl[k.toString()] = v.toString();
+      });
+    }
+    final savedRemarks = qc['qcchecklistremarks'];
+    if (savedRemarks is Map) {
+      savedRemarks.forEach((k, v) {
+        if (v != null && v.toString().isNotEmpty) _clRemarks[k.toString()] = v.toString();
+      });
+    }
   }
 
   void _populatePaymentFields(Map<String, dynamic> data) {
@@ -528,6 +568,9 @@ class _QcDetailPageState extends State<QcDetailPage> {
       "paymentDate": paymentDateIso,
       "paymentMethod": _selectedPaymentMethod ?? 'Online',
       "paymentAmount": paymentAmount,
+      // Checklist — web portal sends these in the same QC body.
+      "qcChecklist": _cl,
+      "qcChecklistRemarks": _clRemarks,
     };
   }
 
@@ -728,6 +771,17 @@ class _QcDetailPageState extends State<QcDetailPage> {
     await api.assignQualityControl(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, assignee, phone, email, phone);
     await api.assignValuation(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, assignee, phone, email, phone);
 
+    await api.addWorkflowHistory(
+      valuationId: ctx["id"]!,
+      action: "QC Submitted to Final Report",
+      remarks: "Quality control completed",
+      performedByUserId: currentUserId,
+      performedByUserName: currentUserName,
+      statusFrom: "QC",
+      statusTo: "FinalReport",
+    );
+    if (!mounted) return;
+
     setState(() => _isSubmitting = false);
     _showSuccess("Submitted to Final Report successfully");
     Navigator.pop(context);
@@ -769,6 +823,16 @@ class _QcDetailPageState extends State<QcDetailPage> {
     if (!mounted) return;
 
     if (res['success'] == true) {
+      await api.addWorkflowHistory(
+        valuationId: ctx["id"]!,
+        action: "QC Returned to $target",
+        remarks: reason,
+        performedByUserId: currentUserId,
+        performedByUserName: currentUserName,
+        statusFrom: "QC",
+        statusTo: target,
+      );
+      if (!mounted) return;
       setState(() => _isReturning = false);
       _showSuccess("Case returned to $target");
       Navigator.pop(context);
@@ -983,6 +1047,13 @@ class _QcDetailPageState extends State<QcDetailPage> {
         backgroundColor: Colors.white,
         elevation: 1,
         iconTheme: const IconThemeData(color: Colors.black),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history, color: Colors.teal),
+            tooltip: "Case History",
+            onPressed: () => showCaseHistory(context, _ctx()["id"]!),
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -1002,6 +1073,7 @@ class _QcDetailPageState extends State<QcDetailPage> {
                   _buildVehicleDetailsSection(),
                   _buildInspectionDetailsSection(),
                   _buildQualityControlSection(),
+                  _buildQcChecklistSection(),
                   _buildPaymentSection(),
                   _buildValuationRangesSection(),
                   _buildAiResponseSection(),
@@ -1498,6 +1570,29 @@ class _QcDetailPageState extends State<QcDetailPage> {
     ]);
   }
 
+  Widget _buildQcChecklistSection() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(left: 4, bottom: 8),
+            child: Text("QC Verification Checklist",
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+          ),
+          // Editable only in edit mode — view mode is read-only.
+          QcChecklistWidget(
+            key: ValueKey('qc-checklist-$_isEditing'),
+            cl: _cl,
+            remarks: _clRemarks,
+            enabled: _isEditing,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPhotosSection() {
     final photos = _finalReport['photoUrls'];
     final List<MapEntry<String, dynamic>> entries = [];
@@ -1515,6 +1610,33 @@ class _QcDetailPageState extends State<QcDetailPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Gallery selection + annotation (portal's QC photo review flow)
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  final ctx = _ctx();
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => QcPhotoReviewPage(
+                        valuationId: ctx["id"]!,
+                        vehicleNumber: ctx["vNo"]!,
+                        applicantContact: ctx["contact"]!,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.photo_library_outlined),
+                label: const Text("Report Photos — Select for Report"),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF007B7B),
+                  side: const BorderSide(color: Color(0xFF007B7B)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             if (entries.isEmpty)
               const Text("No photos available.", style: TextStyle(color: Colors.grey, fontStyle: FontStyle.italic))
             else

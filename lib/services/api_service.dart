@@ -531,12 +531,10 @@ class ApiService {
   // 2f. USER LOOKUP (for return-with-override picker)
   // ===========================================================================
 
-  /// VERIFY ENDPOINT: I don't have users.service.ts. Best guess based on the
-  /// existing /users/all endpoint. If this 404s, replace path or fall back to
-  /// filtering /users/all by role client-side.
+  /// GET /users/roles/{roleId} — users having the given role.
   Future<List<Map<String, dynamic>>> getUsersByRole(String role) async {
     try {
-      final uri = Uri.parse('$baseUrl/users/byrole/$role');
+      final uri = Uri.parse('$baseUrl/users/roles/$role');
       final response = await http.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
@@ -561,7 +559,7 @@ class ApiService {
         final decoded = jsonDecode(response.body);
         if (decoded is List) {
           return decoded
-              .where((u) => u is Map && (u['role']?.toString().toLowerCase() == role.toLowerCase()))
+              .where((u) => u is Map && (u['roleId']?.toString().toLowerCase() == role.toLowerCase()))
               .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e))
               .toList();
         }
@@ -570,6 +568,332 @@ class ApiService {
     } catch (e) {
       return [];
     }
+  }
+
+  // ===========================================================================
+  // 2g. USER LOOKUP & ROLES (mirrors web portal users.service / authorization)
+  // ===========================================================================
+
+  /// GET /users/{userId} — userId is the phone number (e.g. "+91XXXXXXXXXX").
+  Future<Map<String, dynamic>> getUserById(String userId) async {
+    try {
+      final uri = Uri.parse('$baseUrl/users/${Uri.encodeComponent(userId)}');
+      final response = await http.get(uri).timeout(_defaultTimeout);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) return decoded;
+      }
+      return {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  /// GET /users/{userId}/roles — list of role ids assigned to the user.
+  /// The portal passes the Firebase phone number as userId.
+  Future<List<String>> getUserRoles(String userId) async {
+    try {
+      final uri = Uri.parse('$baseUrl/users/${Uri.encodeComponent(userId)}/roles');
+      final response = await http.get(uri).timeout(_defaultTimeout);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is List) return decoded.map((e) => e.toString()).toList();
+      }
+      return [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // ===========================================================================
+  // 2h. USER DASHBOARD (server-driven stats, matches web portal dashboard)
+  // ===========================================================================
+
+  /// GET /valuations/workflows/open/user-dashboard?phone=X&role=Y
+  /// Returns: { openCount, agedCount, completedCount, avgTatHours,
+  ///            openCases: [...], completedCases: [...] }
+  Future<Map<String, dynamic>?> getUserDashboardStats(String phone, String role) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/workflows/open/user-dashboard').replace(
+          queryParameters: {"phone": phone, "role": role});
+      final response = await http.get(uri).timeout(_defaultTimeout);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) return decoded;
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// GET /valuations/workflows/open/completed — all completed cases (admin view).
+  Future<List<dynamic>> getCompletedCases() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/valuations/workflows/open/completed'))
+          .timeout(_defaultTimeout);
+      return response.statusCode == 200 ? jsonDecode(response.body) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// GET /valuations/workflows/open/filter/states?stateKeys=a&stateKeys=b
+  Future<List<dynamic>> getWorkflowsByStates(List<String> stateKeys) async {
+    if (stateKeys.isEmpty) return [];
+    try {
+      final query = stateKeys.map((s) => 'stateKeys=${Uri.encodeQueryComponent(s)}').join('&');
+      final response = await http
+          .get(Uri.parse('$baseUrl/valuations/workflows/open/filter/states?$query'))
+          .timeout(_defaultTimeout);
+      return response.statusCode == 200 ? jsonDecode(response.body) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// GET /valuations/workflows/open/filter/districts?districtKeys=a&districtKeys=b
+  Future<List<dynamic>> getWorkflowsByDistricts(List<String> districtKeys) async {
+    if (districtKeys.isEmpty) return [];
+    try {
+      final query = districtKeys.map((d) => 'districtKeys=${Uri.encodeQueryComponent(d)}').join('&');
+      final response = await http
+          .get(Uri.parse('$baseUrl/valuations/workflows/open/filter/districts?$query'))
+          .timeout(_defaultTimeout);
+      return response.statusCode == 200 ? jsonDecode(response.body) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // ===========================================================================
+  // 2i. DUPLICATE VEHICLE CHECK
+  // ===========================================================================
+
+  /// GET /valuations/check-duplicate?vehicleNumber&engineNumber&chassisNumber&excludeId
+  /// Returns VehicleDuplicateCheckResponse:
+  /// { isDuplicate, isVehicleNumberExists, isEngineNumberExists, isChassisNumberExists,
+  ///   totalDuplicatesFound, existingRecords: [...], messages: [...], averageValuationAmount }
+  /// Returns null on error so callers can distinguish "no result" from "no duplicates".
+  Future<Map<String, dynamic>?> checkDuplicateVehicle({
+    String? vehicleNumber,
+    String? engineNumber,
+    String? chassisNumber,
+    String? excludeId,
+  }) async {
+    final params = <String, String>{};
+    if (vehicleNumber != null && vehicleNumber.trim().isNotEmpty) params['vehicleNumber'] = vehicleNumber.trim();
+    if (engineNumber != null && engineNumber.trim().isNotEmpty) params['engineNumber'] = engineNumber.trim();
+    if (chassisNumber != null && chassisNumber.trim().isNotEmpty) params['chassisNumber'] = chassisNumber.trim();
+    if (excludeId != null && excludeId.trim().isNotEmpty) params['excludeId'] = excludeId.trim();
+    if (params.isEmpty) return null;
+
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/check-duplicate').replace(queryParameters: params);
+      final response = await http.get(uri).timeout(_defaultTimeout);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          return decoded.map((k, v) => MapEntry(k[0].toLowerCase() + k.substring(1), v));
+        }
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ===========================================================================
+  // 2j. CASE HISTORY (mirrors web portal HistoryLoggerService / case-history)
+  // ===========================================================================
+
+  /// POST /valuations/{id}/workflow/addhistory — body is LeadHistoryDto.
+  /// Fire-and-forget like the portal: failures are logged, never surfaced.
+  Future<bool> addWorkflowHistory({
+    required String valuationId,
+    required String action,
+    String remarks = '',
+    String performedByUserId = 'unknown',
+    String performedByUserName = 'Unknown User',
+    String? statusFrom,
+    String? statusTo,
+  }) async {
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      final response = await http.post(
+        Uri.parse('$baseUrl/valuations/$valuationId/workflow/addhistory'),
+        headers: {"Accept": "application/json", "Content-Type": "application/json"},
+        body: jsonEncode({
+          "ValuationId": valuationId,
+          "DateTime": now,
+          "Action": action,
+          "Remarks": remarks,
+          "PerformedByUserId": performedByUserId,
+          "PerformedByUserName": performedByUserName,
+          "StatusFrom": statusFrom,
+          "StatusTo": statusTo,
+          "CurrentTat": 0,
+          "TotalTat": 0,
+          "FirstDateTime": null,
+          "FirstUpdate": false,
+          "StatusChange": statusFrom != null && statusTo != null,
+          "StatusChangedDateTime": now,
+          "PreviousStatus": statusFrom,
+          "CurrentStatus": statusTo,
+        }),
+      ).timeout(_defaultTimeout);
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      debugPrint("History log failed (non-fatal): $e");
+      return false;
+    }
+  }
+
+  /// GET /valuations/{id}/workflow/gethistory — list of LeadHistory entries.
+  Future<List<dynamic>> getWorkflowHistory(String valuationId) async {
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/valuations/$valuationId/workflow/gethistory'))
+          .timeout(_defaultTimeout);
+      return response.statusCode == 200 ? jsonDecode(response.body) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // ===========================================================================
+  // 2k. PHOTO GALLERY SELECTION, ANNOTATION, CUSTOM PHOTOS, METADATA
+  // ===========================================================================
+
+  /// GET /valuations/{id}/photos — map of photoKey → blob URL.
+  Future<Map<String, dynamic>> getVehiclePhotoUrls(String id, String vNo, String contact) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$id/photos').replace(
+          queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
+      final response = await http.get(uri).timeout(_defaultTimeout);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) return decoded;
+      }
+      return {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  /// GET /valuations/{id}/photos/gallery-selection — list of selected photo keys.
+  /// Empty list means "standard" (all photos included).
+  Future<List<String>> getGallerySelection(String id, String vNo, String contact) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$id/photos/gallery-selection').replace(
+          queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
+      final response = await http.get(uri).timeout(_defaultTimeout);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is List) return decoded.map((e) => e.toString()).toList();
+      }
+      return [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// PUT /valuations/{id}/photos/gallery-selection — body is List<String> of keys.
+  Future<bool> saveGallerySelection(String id, String vNo, String contact, List<String> selectedKeys) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$id/photos/gallery-selection').replace(
+          queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
+      final response = await http.put(
+        uri,
+        headers: {"Accept": "application/json", "Content-Type": "application/json"},
+        body: jsonEncode(selectedKeys),
+      ).timeout(_defaultTimeout);
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// PUT /valuations/{id}/photos/{photoKey}/annotate — burns a text note onto the
+  /// photo server-side. photoKey is a fixed slot key or a custom photo id.
+  /// Returns {"photoUrl": ..., "note": ...} on success, null on failure.
+  Future<Map<String, dynamic>?> annotatePhoto(
+      String id, String vNo, String contact, String photoKey, String note) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$id/photos/$photoKey/annotate').replace(
+          queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
+      final response = await http.put(
+        uri,
+        headers: {"Accept": "application/json", "Content-Type": "application/json"},
+        body: jsonEncode({"note": note}),
+      ).timeout(_aiTimeout);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) return decoded;
+        return {};
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// GET /valuations/{id}/photos/custom — custom photos uploaded by the camera app.
+  /// Each entry: { id, name, photoUrl, dateCaptured, location, annotationNote }.
+  Future<List<dynamic>> getCustomPhotos(String id, String vNo, String contact) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$id/photos/custom').replace(
+          queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
+      final response = await http.get(uri).timeout(_defaultTimeout);
+      return response.statusCode == 200 ? jsonDecode(response.body) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// GET /valuations/{id}/photos/metadata — map of photoKey → PhotoMetadata
+  /// ({ capturedDate, locationText, annotationNote, originalPhotoUrl }).
+  Future<Map<String, dynamic>> getPhotosMetadata(String id, String vNo, String contact) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$id/photos/metadata').replace(
+          queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
+      final response = await http.get(uri).timeout(_defaultTimeout);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) return decoded;
+      }
+      return {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  /// PUT /valuations/{id}/photos/{photoType}/metadata — body PhotoMetadataUpdateDto.
+  Future<bool> savePhotoMetadata(String id, String vNo, String contact, String photoType,
+      {String? capturedDate, String? locationText}) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$id/photos/$photoType/metadata').replace(
+          queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
+      final response = await http.put(
+        uri,
+        headers: {"Accept": "application/json", "Content-Type": "application/json"},
+        body: jsonEncode({"capturedDate": capturedDate, "locationText": locationText}),
+      ).timeout(_defaultTimeout);
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // ===========================================================================
+  // 2l. FINAL REPORT PDF
+  // ===========================================================================
+
+  /// URL of the backend-generated Final Report PDF (matches web portal QC view).
+  String finalReportPdfUrl(String id, String vNo, String contact) {
+    return Uri.parse('$baseUrl/valuations/$id/valuationresponse/FinalReport/pdf').replace(
+        queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()}).toString();
   }
 
   // ===========================================================================

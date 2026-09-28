@@ -7,10 +7,11 @@ import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'main.dart';
-import 'backend_dashboard.dart';
 import 'qc_dashboard.dart';
 import 'finalreport_dashboard.dart';
 import 'inspection_field_registry.dart';
+import 'dashboard_common.dart';
+import 'case_history_page.dart';
 
 // =============================================================================
 // VALUATION-TYPE FIELD VISIBILITY MAP (ported from inspection-update.component.ts)
@@ -147,10 +148,11 @@ class AvoDashboard extends StatefulWidget {
 }
 
 class _AvoDashboardState extends State<AvoDashboard> {
-  final ApiService _api = ApiService();
   bool _isLoading = true;
   List<dynamic> _allCases = [];
+  List<dynamic> _completedCases = [];
   List<dynamic> _cases = [];
+  DashboardData? _dashData;
   String _selectedSubTab = "All";
 
   @override
@@ -162,16 +164,17 @@ class _AvoDashboardState extends State<AvoDashboard> {
   Future<void> _loadDashboardData() async {
     setState(() => _isLoading = true);
     try {
-      final all = await _api.getOpenValuations();
-      all.sort((a, b) => (b['createdAt'] ?? "").compareTo(a['createdAt'] ?? ""));
-      // Filter to AVO/Inspection step only
-      final filtered = all.where((c) {
+      // Server-driven: user-dashboard stats (OPEN/AGED/COMPLETED/TAT) with
+      // legacy open-list fallback filtered to the AVO/Inspection step.
+      final data = await loadDashboardData(stepMatcher: (c) {
         final wf = (c['workflow'] ?? "").toString().toLowerCase();
         return wf.contains("avo") || wf.contains("inspection");
-      }).toList();
+      });
       if (mounted) {
         setState(() {
-          _allCases = filtered;
+          _dashData = data;
+          _allCases = data.openCases;
+          _completedCases = data.completedCases;
           _isLoading = false;
         });
         _applySubTab();
@@ -188,7 +191,9 @@ class _AvoDashboardState extends State<AvoDashboard> {
 
   void _applySubTab() {
     List<dynamic> filtered;
-    if (_selectedSubTab == "Returned") {
+    if (_selectedSubTab == "Completed") {
+      filtered = List.from(_completedCases);
+    } else if (_selectedSubTab == "Returned") {
       filtered = _allCases.where((c) {
         final s = (c['status'] ?? "").toString().toLowerCase();
         return s.contains("return");
@@ -239,6 +244,7 @@ class _AvoDashboardState extends State<AvoDashboard> {
       ),
       body: Column(
         children: [
+          if (_dashData != null) DashboardStatsHeader(data: _dashData!, color: Colors.green),
           Container(
             height: 50,
             padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -250,6 +256,8 @@ class _AvoDashboardState extends State<AvoDashboard> {
                 _buildTabChip("Pending", _allCases.where((c) => !(c['status'] ?? "").toString().toLowerCase().contains("return")).length),
                 const SizedBox(width: 8),
                 _buildTabChip("Returned", _allCases.where((c) => (c['status'] ?? "").toString().toLowerCase().contains("return")).length),
+                const SizedBox(width: 8),
+                _buildTabChip("Completed", _completedCases.length),
               ],
             ),
           ),
@@ -450,9 +458,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     "Muthoot Capital Services", "Cholamandalam Investment and Finance Company",
     "Sundaram Finance", "Manappuram Finance", "L&T Finance"
   ];
-  final List<String> _valuationTypes = [
-    "Four Wheeler", "Commercial Vehicle", "Two Wheeler", "Three Wheeler", "Tractor", "Construction Equipment"
-  ];
+  final List<String> _valuationTypes = valuationTypeOptions;
   final List<String> _fuelTypes = ["Petrol", "Diesel", "CNG", "Electric", "Hybrid", "LPG"];
 
   // Payment dropdown options
@@ -922,7 +928,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
         _getUniversalValue(data, ['applicant.contact', 'applicantContact', 'ApplicantContact']);
 
     _vehNoController.text = _getUniversalValue(data, ['vehicleNumber', 'VehicleNumber']);
-    _vehSegController.text = _getUniversalValue(data, ['vehicleSegment', 'VehicleSegment']);
+    _vehSegController.text = vehicleSegmentLabelOf(_getUniversalValue(data, ['vehicleSegment', 'VehicleSegment']));
 
     _stkRemarksController.text = _getUniversalValue(data, ['remarks', 'Remarks']);
   }
@@ -1468,6 +1474,14 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     final ctx = _getSafeContext();
     final assignee = _assigneeNameForUser();
 
+    // Portal parity: mandatory photos + vehicle video must exist before the
+    // inspection can be saved ("Cannot save inspection!" in the web portal).
+    final photosOk = await _ensureMandatoryPhotos(ctx);
+    if (!photosOk) {
+      if (mounted) setState(() => _isSaving = false);
+      return;
+    }
+
     final inspRes = await api.saveInspectionForAvo(
       id: ctx["id"]!,
       vNo: ctx["vNo"]!,
@@ -1521,19 +1535,10 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     final ctx = _getSafeContext();
     final assignee = _assigneeNameForUser();
 
-    final photoCheck = await api.checkMandatoryPhotos(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
-    if (!mounted) return;
-
-    if (photoCheck['endpointMissing'] == true) {
-      debugPrint("WARN: checkMandatoryPhotos endpoint missing — skipping photo gating");
-    } else if (photoCheck['isComplete'] != true) {
-      setState(() => _isSubmitting = false);
-      final missing = (photoCheck['missingPhotos'] as List?)?.cast<String>() ?? [];
-      if (missing.isNotEmpty) {
-        await _showMissingPhotosDialog(missing);
-      } else {
-        _showError(photoCheck['error']?.toString() ?? "Photo validation failed");
-      }
+    // Portal parity: mandatory photos + vehicle video gate the submit too.
+    final photosOk = await _ensureMandatoryPhotos(ctx);
+    if (!photosOk) {
+      if (mounted) setState(() => _isSubmitting = false);
       return;
     }
 
@@ -1587,6 +1592,17 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       debugPrint("WARN: updateWorkflowTable failed after Submit: ${tableRes['message']}");
     }
 
+    await api.addWorkflowHistory(
+      valuationId: ctx["id"]!,
+      action: "AVO Inspection Submitted",
+      remarks: "Inspection completed, sent to QC",
+      performedByUserId: currentUserId,
+      performedByUserName: currentUserName,
+      statusFrom: "AVO",
+      statusTo: "QC",
+    );
+    if (!mounted) return;
+
     setState(() => _isSubmitting = false);
     _showSuccess("Submitted to QC successfully");
     Navigator.pop(context);
@@ -1613,6 +1629,16 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     if (!mounted) return;
 
     if (res['success'] == true) {
+      await api.addWorkflowHistory(
+        valuationId: ctx["id"]!,
+        action: "AVO Returned to Backend",
+        remarks: reason,
+        performedByUserId: currentUserId,
+        performedByUserName: currentUserName,
+        statusFrom: "AVO",
+        statusTo: "Backend",
+      );
+      if (!mounted) return;
       setState(() => _isReturning = false);
       _showSuccess("Case returned to Backend");
       Navigator.pop(context);
@@ -1719,6 +1745,28 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     );
   }
 
+  /// Runs the backend mandatory-media check (photos + vehicle video), showing
+  /// the missing-items dialog when incomplete. Returns true when save/submit
+  /// may proceed. Mirrors the portal's checkMandatoryPhotosBeforeSave().
+  Future<bool> _ensureMandatoryPhotos(Map<String, String> ctx) async {
+    final photoCheck = await api.checkMandatoryPhotos(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
+    if (!mounted) return false;
+
+    if (photoCheck['endpointMissing'] == true) {
+      debugPrint("WARN: checkMandatoryPhotos endpoint missing — skipping photo gating");
+      return true;
+    }
+    if (photoCheck['isComplete'] == true) return true;
+
+    final missing = (photoCheck['missingPhotos'] as List?)?.cast<String>() ?? [];
+    if (missing.isNotEmpty) {
+      await _showMissingPhotosDialog(missing);
+    } else {
+      _showError(photoCheck['error']?.toString() ?? "Photo validation failed. Please try again.");
+    }
+    return false;
+  }
+
   Future<void> _showMissingPhotosDialog(List<String> missing) async {
     await showDialog<void>(
       context: context,
@@ -1734,7 +1782,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text("${missing.length} mandatory image(s) missing:",
+              Text("${missing.length} mandatory item(s) missing:",
                   style: const TextStyle(fontWeight: FontWeight.w500)),
               const SizedBox(height: 8),
               Flexible(
@@ -1747,7 +1795,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Text("Upload all required photos before submitting.",
+              const Text("Upload all required photos and the vehicle video before saving.",
                   style: TextStyle(color: Colors.grey, fontSize: 12)),
             ],
           ),
@@ -1884,7 +1932,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       "ExecutiveWhatsapp": _stkWhatsappController.text,
       "ExecutiveEmail": _stkEmailController.text,
       "ValuationType": _selectedValuationType ?? _stkValTypeController.text,
-      "VehicleSegment": _vehSegController.text,
+      "VehicleSegment": vehicleSegmentValueOf(_vehSegController.text),
       "LocationName": _stkLocationController.text,
       "Block": _stkBlockController.text,
       "District": _stkDistrictController.text,
@@ -1959,7 +2007,14 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
           title: const Text("Valuation Details", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
           backgroundColor: Colors.white,
           elevation: 1,
-          iconTheme: const IconThemeData(color: Colors.black)),
+          iconTheme: const IconThemeData(color: Colors.black),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.history, color: Colors.teal),
+              tooltip: "Case History",
+              onPressed: () => showCaseHistory(context, _getSafeContext()["id"]!),
+            ),
+          ]),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
