@@ -1,8 +1,13 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 import 'services/api_service.dart';
 import 'main.dart';
 import 'avo_dashboard.dart';
@@ -306,6 +311,7 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
   bool _isCompleting = false;
   bool _isReturning = false;
   bool _isReturningReport = false;
+  bool _downloadingPdf = false;
 
   // Server data
   Map<String, dynamic> _finalReport = {};
@@ -676,17 +682,41 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
       "applicantContact": applicantContact,
     }).toString();
 
+    // Fetch it here rather than handing the link to a browser, which is what the
+    // portal does. The report is built on demand and takes a while, so in a
+    // browser tab it just looks like a blank page that never loads.
+    if (_downloadingPdf) return;
+    setState(() => _downloadingPdf = true);
     try {
-      // Ask the browser directly rather than asking canLaunchUrl first: that
-      // check answers "no" whenever the manifest's <queries> misses a scheme,
-      // even with a browser installed, and reports a browser problem that isn't.
-      final opened =
-          await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-      if (!opened) {
-        _showError("No app on this phone could open the report link.");
+      final res = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(minutes: 3));
+
+      if (res.statusCode != 200) {
+        _showError("Report service returned ${res.statusCode}. Try again.");
+        return;
       }
+      if (res.bodyBytes.length < 5 ||
+          String.fromCharCodes(res.bodyBytes.take(4)) != "%PDF") {
+        _showError("The report came back empty. Try again.");
+        return;
+      }
+
+      // Same file name as the portal's download.
+      final dir = await getTemporaryDirectory();
+      final file = File("${dir.path}/${vehicleNumber}_report.pdf");
+      await file.writeAsBytes(res.bodyBytes, flush: true);
+
+      final opened = await OpenFilex.open(file.path, type: "application/pdf");
+      if (opened.type != ResultType.done) {
+        _showError("Report saved, but no PDF app could open it: ${opened.message}");
+      }
+    } on TimeoutException {
+      _showError("The report is taking too long to build. Try again.");
     } catch (e) {
       _showError("PDF error: $e");
+    } finally {
+      if (mounted) setState(() => _downloadingPdf = false);
     }
   }
 
@@ -1034,9 +1064,15 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
             onPressed: () => showCaseHistory(context, _ctx()["id"]!),
           ),
           IconButton(
-            icon: const Icon(Icons.picture_as_pdf, color: Colors.teal),
+            icon: _downloadingPdf
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        color: Colors.teal, strokeWidth: 2))
+                : const Icon(Icons.picture_as_pdf, color: Colors.teal),
             tooltip: "Download PDF",
-            onPressed: _downloadPdf,
+            onPressed: _downloadingPdf ? null : _downloadPdf,
           ),
         ],
       ),
@@ -1052,10 +1088,20 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
-                        onPressed: _downloadPdf,
-                        icon: const Icon(Icons.picture_as_pdf, size: 18),
-                        label: const Text("Download PDF",
-                            style: TextStyle(fontWeight: FontWeight.bold)),
+                        onPressed: _downloadingPdf ? null : _downloadPdf,
+                        icon: _downloadingPdf
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    color: Colors.white, strokeWidth: 2))
+                            : const Icon(Icons.picture_as_pdf, size: 18),
+                        label: Text(
+                            _downloadingPdf
+                                ? "Preparing report…"
+                                : "Download PDF",
+                            style:
+                                const TextStyle(fontWeight: FontWeight.bold)),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.indigo.shade600,
                           foregroundColor: Colors.white,
@@ -1253,9 +1299,15 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
           const SizedBox(width: 10),
           Expanded(
             child: ElevatedButton.icon(
-              onPressed: _downloadPdf,
-              icon: const Icon(Icons.picture_as_pdf, size: 16),
-              label: const Text("PDF"),
+              onPressed: _downloadingPdf ? null : _downloadPdf,
+              icon: _downloadingPdf
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2))
+                  : const Icon(Icons.picture_as_pdf, size: 16),
+              label: Text(_downloadingPdf ? "Preparing…" : "PDF"),
               style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.indigo.shade600,
                   foregroundColor: Colors.white,
@@ -1301,12 +1353,18 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
         const SizedBox(width: 8),
         Expanded(
           child: ElevatedButton(
-            onPressed: busy ? null : _downloadPdf,
+            onPressed: busy || _downloadingPdf ? null : _downloadPdf,
             style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.indigo.shade600,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 12)),
-            child: const Text("DOWNLOAD PDF"),
+            child: _downloadingPdf
+                ? const SizedBox(
+                    height: 18,
+                    width: 18,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2))
+                : const Text("DOWNLOAD PDF"),
           ),
         ),
       ]),
