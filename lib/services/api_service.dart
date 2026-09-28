@@ -6,7 +6,21 @@ import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
 class ApiService {
-  final String baseUrl = "https://prontobackend-bhdnbec2fvd3ecfk.eastus2-01.azurewebsites.net/api";
+  /// Production since 2026-09-22: the vehgaprod resource group in the company
+  /// Azure account. Pass --dart-define=API_BASE_URL=... to build against another
+  /// server (the old apps are stopped).
+  static const String defaultBaseUrl =
+      "https://vehgaprd-ech3ewccc8dxcgcz.centralindia-01.azurewebsites.net/api";
+
+  /// The report service (ProntoPDFGeneration), which produces the same six-page
+  /// report as the portal. Override with --dart-define=PDF_BASE_URL=...
+  static const String pdfBaseUrl = String.fromEnvironment(
+    'PDF_BASE_URL',
+    defaultValue: "https://vehgapdf-c4hrbehgauf8gtez.centralindia-01.azurewebsites.net",
+  );
+
+  final String baseUrl =
+      const String.fromEnvironment('API_BASE_URL', defaultValue: defaultBaseUrl);
 
   // Default timeout for non-AI calls. AI submission gets its own (longer) timeout.
   static const Duration _defaultTimeout = Duration(seconds: 40);

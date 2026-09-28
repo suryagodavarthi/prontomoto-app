@@ -628,8 +628,21 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
       _showError("Valuation ID not available for PDF generation.");
       return;
     }
-    final url =
-        "https://prontomotopdf.azurewebsites.net/api/GenerateReport?valuationId=$valuationId";
+    final vehicleNumber = widget.summaryData['vehicleNumber']?.toString() ?? "";
+    final applicantContact = widget.summaryData['applicantContact']?.toString() ?? "";
+    if (vehicleNumber.isEmpty || applicantContact.isEmpty) {
+      _showError("Vehicle number or applicant contact missing for this case.");
+      return;
+    }
+
+    // The report service the portal uses, so the app shows the same six-page
+    // report. The old prontomotopdf host this used to call no longer exists.
+    final url = Uri.parse("${ApiService.pdfBaseUrl}/api/Valuation/FinalReport/pdf")
+        .replace(queryParameters: {
+      "id": valuationId,
+      "vehicleNumber": vehicleNumber,
+      "applicantContact": applicantContact,
+    }).toString();
 
     try {
       final uri = Uri.parse(url);
