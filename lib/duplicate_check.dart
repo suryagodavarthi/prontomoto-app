@@ -5,6 +5,8 @@
 
 import 'package:flutter/material.dart';
 import 'services/api_service.dart';
+import 'services/brand.dart';
+import 'date_format.dart';
 
 /// Runs the duplicate check and shows a results dialog when duplicates exist.
 ///
@@ -118,8 +120,8 @@ class _DuplicateDialog extends StatelessWidget {
 
   Widget _recordTile(dynamic r) {
     if (r is! Map) return const SizedBox.shrink();
-    String created = (r['createdDate'] ?? '').toString();
-    if (created.length > 10) created = created.substring(0, 10);
+    // Day-first, as the portal shows every date.
+    final created = formatDdMmYyyy((r['createdDate'] ?? '').toString());
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
@@ -142,6 +144,8 @@ class _DuplicateDialog extends StatelessWidget {
           const SizedBox(height: 4),
           Text("Matched on: ${r['matchedField'] ?? '-'}",
               style: const TextStyle(fontSize: 12, color: Colors.deepOrange)),
+          // Dedupe spans both companies, so each match says which one it sits in.
+          Text("Inspected By: ${brandName(r['brand']?.toString())}", style: const TextStyle(fontSize: 12)),
           if ((r['company'] ?? '').toString().isNotEmpty)
             Text("Company: ${r['company']}", style: const TextStyle(fontSize: 12)),
           if (r['valuationAmount'] != null)

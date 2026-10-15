@@ -3,13 +3,18 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:file_picker/file_picker.dart';
 import 'services/api_service.dart';
+import 'services/brand.dart';
 import 'main.dart';
 import 'avo_dashboard.dart';
 import 'qc_dashboard.dart';
 import 'finalreport_dashboard.dart';
 import 'dashboard_common.dart';
 import 'case_history_page.dart';
+import 'case_search_page.dart';
+import 'case_info_bar.dart';
 import 'duplicate_check.dart';
+import 'client_rules.dart';
+import 'date_format.dart';
 
 class BackendDashboard extends StatefulWidget {
   final String userName;
@@ -94,11 +99,13 @@ class _BackendDashboardState extends State<BackendDashboard> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("Vehga Backend", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
+            Text("${Brand.profile.name} Backend", style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
             Text("Hello, ${widget.userName}", style: const TextStyle(color: Colors.grey, fontSize: 12)),
           ],
         ),
         actions: [
+          IconButton(icon: const Icon(Icons.search, color: Colors.black), tooltip: "Search cases",
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CaseSearchPage()))),
           IconButton(icon: const Icon(Icons.refresh, color: Colors.black), onPressed: _loadDashboardData),
           IconButton(
               icon: const Icon(Icons.logout, color: Colors.red),
@@ -298,9 +305,21 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
   final List<String> _vehicleClasses = ["Private", "Commercial", "Transport", "Non-Transport"];
   final List<String> _normsTypes = ["Bharat Stage III", "Bharat Stage IV", "Bharat Stage VI", "Euro 3", "Euro 4"];
   final List<String> _ownersList = ["1", "2", "3", "4", "5+"];
-  List<String> _assigneeList = ["SHEKHAR (AVO)", "Final Report Team", "Admin"];
+  /// Users who can take an inspection (role CanEditInspection), as the portal lists them.
+  List<Map<String, dynamic>> _inspectors = [];
+  String? _selectedInspectorId;
 
-  String? _selectedAssignee;
+  /// Who the case is assigned to now, for the "Currently assigned" line.
+  Map<String, dynamic> _assignedUser = {};
+  bool _assigning = false;
+
+  /// The portal's assignFrozen: Submit waits for an assignment made on this
+  /// visit, unless the user also holds QC or Final Report permissions.
+  bool _assignedThisSession = false;
+
+  /// TVS Credit's report prints an estimated life remaining, entered here.
+  bool _isTvs = false;
+  final _lifeController = TextEditingController();
 
   final _regNoController = TextEditingController();
   final _makeController = TextEditingController();
@@ -366,8 +385,12 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
     var d = {...widget.summaryData, ..._fullData};
     String id = widget.summaryData['valuationId']?.toString() ?? widget.summaryData['id']?.toString() ?? "";
     
-    String vNo = _regNoController.text.trim();
-    if (vNo.isEmpty) vNo = _val(d, ['VehicleNumber', 'vehicleNumber', 'RegistrationNumber']);
+    // The case is keyed on the vehicle number it was registered under. The
+    // Registration Number field is editable (for when the RC lookup returned
+    // nothing), so it must never become the key: a save would land elsewhere.
+    String vNo = _val(widget.summaryData, ['vehicleNumber', 'VehicleNumber']);
+    if (vNo.isEmpty) vNo = _val(d, ['VehicleNumber', 'vehicleNumber']);
+    if (vNo.isEmpty) vNo = _regNoController.text.trim();
     if (vNo.isEmpty) vNo = "UNKNOWN";
     
     String contact = _val(d, ['ApplicantContact', 'applicantContact']);
@@ -384,24 +407,8 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
     var stakeholderDetails = await api.getValuationDetails(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
     var fetchedNotes = await api.getNotes(ctx["id"]!);
 
-    // Load assignee list from API (AVO role users), fall back to defaults on error
-    try {
-      final avoUsers = await api.getUsersByRole('avo');
-      final frUsers = await api.getUsersByRole('finalreport');
-      final allUsers = [...avoUsers, ...frUsers];
-      if (allUsers.isNotEmpty) {
-        final names = allUsers.map((u) {
-          final name = u['name']?.toString() ?? u['userName']?.toString() ?? '';
-          final role = u['role']?.toString() ?? '';
-          return name.isNotEmpty ? '$name ($role)' : '';
-        }).where((s) => s.isNotEmpty).toList();
-        if (names.isNotEmpty && mounted) {
-          setState(() => _assigneeList = names);
-        }
-      }
-    } catch (_) {
-      // Keep default list on failure
-    }
+    final inspectors = await api.getUsersByRole('CanEditInspection');
+    final assigned = await api.getAssignedUser(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
 
     if (mounted) {
       setState(() {
@@ -411,6 +418,9 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
         _fullData.addAll(details);
 
         _notes = fetchedNotes;
+        _inspectors = inspectors;
+        _assignedUser = assigned;
+        _isTvs = isTvsCredit(_val(stakeholderDetails, ['name', 'Name', 'stakeholderName']));
         _populateControllers();
         _isLoading = false;
       });
@@ -455,7 +465,7 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
     _permitNoController.text = _val(d, ['PermitNo', 'permitNo']);
     _permitValidController.text = _fmtDate(_val(d, ['PermitValidUpTo', 'permitValidUpTo']));
     _permitTypeController.text = _val(d, ['PermitType', 'permitType']);
-    _permitIssuedController.text = _fmtDate(_val(d, ['PermitIssuedDate', 'permitIssuedDate']));
+    _permitIssuedController.text = _fmtDate(_val(d, ['PermitIssued', 'permitIssued', 'PermitIssuedDate', 'permitIssuedDate']));
     _permitFromController.text = _fmtDate(_val(d, ['PermitFrom', 'permitFrom']));
     _fitnessNoController.text = _val(d, ['FitnessNo', 'fitnessNo']);
     _fitnessValidController.text = _fmtDate(_val(d, ['FitnessValidTo', 'fitnessValidTo']));
@@ -470,6 +480,7 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
     _stencilUrlController.text = _val(d, ['StencilTraceUrl', 'stencilTraceUrl']);
     _chassisUrlController.text = _val(d, ['ChassisNoPhotoUrl', 'chassisNoPhotoUrl']);
     _remarksController.text = _val(d, ['Remarks', 'remarks']);
+    _lifeController.text = _val(d, ['EstimatedLifeRemaining', 'estimatedLifeRemaining']);
 
     _setDropdown(_val(d, ['Fuel', 'fuel']), _fuelTypes, (v) => _selectedFuel = v);
 
@@ -529,18 +540,172 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
     return (s.contains("T")) ? s.split("T")[0] : s;
   }
 
+  /// The portal's required fields and limits for this page. Names every field
+  /// still blocking the save, rather than refusing without saying why.
+  bool _validate() {
+    final missing = <String>[];
+    void req(String label, TextEditingController c) {
+      if (c.text.trim().isEmpty) missing.add(label);
+    }
+
+    req("Registration Number", _regNoController);
+    req("Make", _makeController);
+    req("Model", _modelController);
+    req("Body Type", _bodyTypeController);
+    req("Year Mfg", _mfgYearController);
+    req("Month Mfg", _mfgMonthController);
+    req("Engine Number", _engineNoController);
+    req("Chassis Number", _chassisNoController);
+    req("Engine CC", _engineCcController);
+    req("Date of Registration", _regDateController);
+    req("RTO", _rtoController);
+    req("Class of Vehicle", _classVehicleController);
+    req("Owner Name", _ownerNameController);
+    req("Present Address", _presentAddrController);
+    req("Permanent Address", _permAddrController);
+    if (_isTvs) req("Estimated Life Remaining", _lifeController);
+
+    final problems = <String>[];
+    if (missing.isNotEmpty) problems.add("Required: ${missing.join(', ')}");
+    final reg = _regNoController.text.trim();
+    if (reg.isNotEmpty && !RegExp(r'^[A-Za-z0-9 ]+$').hasMatch(reg)) {
+      problems.add("Registration Number: letters and digits only");
+    }
+    final yearText = _mfgYearController.text.trim();
+    final year = int.tryParse(yearText);
+    if (yearText.isNotEmpty && (year == null || year < 1900)) problems.add("Year Mfg must be a year from 1900");
+    final monthText = _mfgMonthController.text.trim();
+    final month = int.tryParse(monthText);
+    if (monthText.isNotEmpty && (month == null || month < 1 || month > 12)) problems.add("Month Mfg must be 1 to 12");
+    final ccText = _engineCcController.text.trim();
+    if (ccText.isNotEmpty && int.tryParse(ccText) == null) problems.add("Engine CC must be a whole number");
+    final lifeText = _lifeController.text.trim();
+    final life = int.tryParse(lifeText);
+    if (lifeText.isNotEmpty && (life == null || life < 0 || life > 50)) {
+      problems.add("Estimated Life Remaining: enter whole years, 0 to 50");
+    }
+
+    if (problems.isEmpty) return true;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(problems.join("\n")),
+      backgroundColor: Colors.red,
+      duration: const Duration(seconds: 6),
+    ));
+    return false;
+  }
+
+  /// Users with QC or Final Report permissions may submit without assigning,
+  /// as in the portal's canSubmitWithoutAssign.
+  bool get _canSubmitWithoutAssign => const [
+        'CanViewQualityControl', 'CanCreateQualityControl', 'CanEditQualityControl',
+        'CanViewFinalReport', 'CanCreateFinalReport', 'CanEditFinalReport',
+      ].any(currentUserRoles.contains);
+
+  /// A hand-typed number that will print differently from the case it is filed under.
+  bool get _regDiffersFromCase {
+    final reg = _regNoController.text.replaceAll(RegExp(r'\s+'), '').toUpperCase();
+    return reg.isNotEmpty && reg != _getSafeContext()["vNo"]!.toUpperCase();
+  }
+
   Future<void> _handleSave() async {
+    if (!_validate()) return;
     setState(() => _isSaving = true);
     await _performUpdate(isSubmit: false);
   }
 
   Future<void> _handleSubmit() async {
-    if (_selectedAssignee == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please Select an Assignee"), backgroundColor: Colors.red));
+    if (!_assignedThisSession && !_canSubmitWithoutAssign) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please assign the case before submitting"), backgroundColor: Colors.red));
       return;
     }
+    if (!_validate()) return;
+
+    // Portal parity: a duplicate vehicle, engine or chassis must be confirmed.
+    final ctx = _getSafeContext();
+    final proceed = await checkDuplicatesAndConfirm(
+      context,
+      vehicleNumber: _regNoController.text.trim().isEmpty ? ctx["vNo"] : _regNoController.text.trim(),
+      engineNumber: _engineNoController.text,
+      chassisNumber: _chassisNoController.text,
+      excludeId: ctx["id"],
+      confirmMode: true,
+    );
+    if (!proceed || !mounted) return;
+
     setState(() => _isSubmitting = true);
     await _performUpdate(isSubmit: true);
+  }
+
+  /// Assigns the inspector, as the portal's Assign button does: the inspection
+  /// assignment and the valuation assignment, together.
+  Future<void> _assignInspector() async {
+    final user = _inspectors.firstWhere(
+        (u) => (u['userId'] ?? u['email'] ?? '').toString() == _selectedInspectorId,
+        orElse: () => {});
+    if (user.isEmpty) return;
+    final ctx = _getSafeContext();
+    final name = (user['name'] ?? '').toString();
+    final phone = (user['phoneNumber'] ?? user['whatsapp'] ?? '').toString();
+    final email = (user['email'] ?? '').toString();
+    final whatsapp = (user['whatsapp'] ?? phone).toString();
+
+    setState(() => _assigning = true);
+    final ok = await api.assignInspection(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, name, phone, email, whatsapp) &&
+        await api.assignValuation(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, name, phone, email, whatsapp);
+    final assigned = ok ? await api.getAssignedUser(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!) : _assignedUser;
+    if (!mounted) return;
+    setState(() {
+      _assigning = false;
+      _assignedThisSession = _assignedThisSession || ok;
+      _assignedUser = assigned;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok ? "Inspector assigned successfully" : "Assignment failed"),
+      backgroundColor: ok ? Colors.green : Colors.red,
+    ));
+  }
+
+  Widget _buildAssignCard() {
+    final assignedName = (_assignedUser['name'] ?? '').toString();
+    final assignedPhone = (_assignedUser['phoneNumber'] ?? '').toString();
+    final ids = _inspectors.map((u) => (u['userId'] ?? u['email'] ?? '').toString()).toSet();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade300)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text("Assign Inspection", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        const SizedBox(height: 8),
+        if (assignedName.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text("Currently assigned: $assignedName${assignedPhone.isNotEmpty ? ' — $assignedPhone' : ''}",
+                style: const TextStyle(fontSize: 13, color: Colors.black87)),
+          ),
+        DropdownButtonFormField<String>(
+          value: ids.contains(_selectedInspectorId) ? _selectedInspectorId : null,
+          isExpanded: true,
+          decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.all(12), labelText: "Inspector"),
+          items: _inspectors.map((u) {
+            final id = (u['userId'] ?? u['email'] ?? '').toString();
+            final phone = (u['phoneNumber'] ?? u['whatsapp'] ?? '').toString();
+            return DropdownMenuItem(value: id, child: Text("${u['name'] ?? id}${phone.isNotEmpty ? ' — $phone' : ''}", overflow: TextOverflow.ellipsis));
+          }).toList(),
+          onChanged: (val) => setState(() => _selectedInspectorId = val),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: (_selectedInspectorId == null || _assigning) ? null : _assignInspector,
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF3F51B5), foregroundColor: Colors.white),
+            child: _assigning
+                ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : const Text("ASSIGN"),
+          ),
+        ),
+      ]),
+    );
   }
 
   Future<void> _performUpdate({required bool isSubmit}) async {
@@ -560,7 +725,10 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
       var ctx = _getSafeContext();
 
       Map<String, dynamic> vehicleData = {
-        "RegistrationNumber": _regNoController.text,
+        // As the portal sends it: no spaces, upper case, the case's own number
+        // when the field was left empty.
+        "RegistrationNumber": (_regNoController.text.trim().isEmpty ? ctx["vNo"]! : _regNoController.text)
+            .replaceAll(RegExp(r'\s+'), '').toUpperCase(),
         "Make": _makeController.text,
         "Model": _modelController.text,
         "Colour": _colorController.text,
@@ -574,8 +742,9 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
         "EngineNumber": _engineNoController.text,
         "ChassisNumber": _chassisNoController.text,
         "EngineCC": int.tryParse(_engineCcController.text) ?? 0,
-        "GrossVehicleWeight": double.tryParse(_grossWeightController.text) ?? 0.0,
-        "SeatingCapacity": int.tryParse(_seatingController.text) ?? 0,
+        // Optional numbers go blank rather than 0, which the report would print.
+        "GrossVehicleWeight": _grossWeightController.text.trim(),
+        "SeatingCapacity": _seatingController.text.trim(),
         "DateOfRegistration": _regDateController.text,
         "Rto": _rtoController.text,
         "MakerVariant": _makerVariantController.text,
@@ -586,15 +755,15 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
         "Lender": _lenderController.text,
         "Hypothecation": _hypothecation,
         "RcStatus": _rcStatus,
-        "BlacklistStatus": _blacklistStatus,
+        "BacklistStatus": _blacklistStatus, // sic: the backend model's spelling
         "Insurer": _insurerController.text,
         "InsurancePolicyNo": _policyNoController.text,
         "InsuranceValidUpTo": _insuranceValidController.text,
-        "IDV": double.tryParse(_idvController.text) ?? 0.0,
+        "IDV": _idvController.text.trim(),
         "PermitNo": _permitNoController.text,
         "PermitValidUpTo": _permitValidController.text,
         "PermitType": _permitTypeController.text,
-        "PermitIssuedDate": _permitIssuedController.text,
+        "PermitIssued": _permitIssuedController.text,
         "PermitFrom": _permitFromController.text,
         "FitnessNo": _fitnessNoController.text,
         "FitnessValidTo": _fitnessValidController.text,
@@ -602,7 +771,8 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
         "TaxPaidUpto": _taxPaidController.text,
         "PollutionCertificateNumber": _pollutionNoController.text,
         "PollutionCertificateUpto": _pollutionValidController.text,
-        "ExShowroomPrice": double.tryParse(_showroomPriceController.text) ?? 0.0,
+        "ExShowroomPrice": _showroomPriceController.text.trim(),
+        if (_lifeController.text.trim().isNotEmpty) "EstimatedLifeRemaining": _lifeController.text.trim(),
         "ManufacturedDate": _mfgDateController.text,
         "StencilTraceUrl": _stencilUrlController.text,
         "ChassisNoPhotoUrl": _chassisUrlController.text,
@@ -638,20 +808,29 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
 
       if (!mounted) return;
 
-      if (isSubmit) {
-        await api.assignBackendTask(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, _selectedAssignee!);
+      // Portal parity: whoever saves or submits holds the Backend stage.
+      final backEndHolder = {
+        "backEndAssignedTo": currentUserName,
+        "backEndAssignedToPhoneNumber": currentUserPhone,
+        "backEndAssignedToWhatsapp": currentUserPhone,
+      };
 
-        // FIX: The stepOrder is pulled from outer scope and the invalid assignee param is removed
+      if (isSubmit) {
         var advanceResult = await api.advanceToNextStage(ctx["id"]!, stepOrder, ctx["vNo"]!, ctx["contact"]!);
-        await api.addWorkflowHistory(
-          valuationId: ctx["id"]!,
-          action: "Backend Submitted to AVO",
-          remarks: "Assigned to ${_selectedAssignee ?? '-'}",
-          performedByUserId: currentUserId,
-          performedByUserName: currentUserName,
-          statusFrom: "Backend",
-          statusTo: "AVO",
-        );
+        if (advanceResult["success"] == true) {
+          await api.updateWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
+              {"workflow": "AVO", "workflowStepOrder": 3, ...backEndHolder});
+          await api.assignBackend(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, currentUserName, currentUserPhone, '', currentUserPhone);
+          await api.addWorkflowHistory(
+            valuationId: ctx["id"]!,
+            action: "Vehicle Details Submitted - Moving to AVO",
+            remarks: "Vehicle details submitted. Status: Backend Complete \u2192 AVO In Progress",
+            performedByUserId: currentUserId,
+            performedByUserName: currentUserName,
+            statusFrom: "Backend",
+            statusTo: "AVO",
+          );
+        }
 
         if (mounted) {
           setState(() { _isSaving = false; _isSubmitting = false; });
@@ -663,6 +842,18 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
           }
         }
       } else {
+        await api.startWorkflow(ctx["id"]!, 2, ctx["vNo"]!, ctx["contact"]!);
+        await api.updateWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
+            {"workflow": "Backend", "workflowStepOrder": 2, ...backEndHolder});
+        await api.assignBackend(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, currentUserName, currentUserPhone, '', currentUserPhone);
+        await api.addWorkflowHistory(
+          valuationId: ctx["id"]!,
+          action: "Vehicle Details Updated - Saved",
+          remarks: "Vehicle details saved",
+          performedByUserId: currentUserId,
+          performedByUserName: currentUserName,
+          statusTo: "Backend",
+        );
         await _loadFullDetails();
         
         if (mounted) {
@@ -934,7 +1125,9 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
     if (_isEditing) {
       return Padding(padding: const EdgeInsets.only(bottom: 12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: TextStyle(color: Colors.grey[700], fontSize: 12)), const SizedBox(height: 4), TextField(controller: controller, readOnly: isDate, maxLines: maxLines, onTap: isDate ? () => _selectDate(context, controller) : null, decoration: InputDecoration(border: const OutlineInputBorder(), isDense: true, contentPadding: const EdgeInsets.all(12), suffixIcon: isDate ? const Icon(Icons.calendar_today, size: 16) : null))]));
     } else {
-      return Padding(padding: const EdgeInsets.only(bottom: 12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: TextStyle(color: Colors.grey[600], fontSize: 11)), const SizedBox(height: 2), Text(controller.text.isEmpty ? "-" : controller.text, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87))]));
+      // Dates are viewed day-first, as the portal shows them; the field keeps yyyy-MM-dd for saving.
+      final shown = isDate && formatDdMmYyyy(controller.text).isNotEmpty ? formatDdMmYyyy(controller.text) : controller.text;
+      return Padding(padding: const EdgeInsets.only(bottom: 12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: TextStyle(color: Colors.grey[600], fontSize: 11)), const SizedBox(height: 2), Text(shown.isEmpty ? "-" : shown, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87))]));
     }
   }
 
@@ -1025,12 +1218,24 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
         child: Column(
           children: [
             _buildHeaderCard(),
-            const SizedBox(height: 15),
+            const SizedBox(height: 12),
+            CaseInfoBar(
+              valuationId: (widget.summaryData['valuationId'] ?? widget.summaryData['id'] ?? '').toString(),
+              vehicleNumber: _getSafeContext()["vNo"]!,
+              applicantContact: _getSafeContext()["contact"]!,
+            ),
+            const SizedBox(height: 3),
             if (!_isEditing) Row(children: [Expanded(child: ElevatedButton(onPressed: () => setState(() => _isEditing = true), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF3F51B5), foregroundColor: Colors.white), child: const Text("Edit"))), const SizedBox(width: 10), Expanded(child: ElevatedButton(onPressed: () => Navigator.pop(context), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF4081), foregroundColor: Colors.white), child: const Text("Back")))]),
             const SizedBox(height: 20),
 
             _buildSection(title: "Vehicle Information", children: [
               _buildTextField("Registration Number", _regNoController),
+              if (_regDiffersFromCase)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text("Differs from case number ${_getSafeContext()["vNo"]}",
+                      style: const TextStyle(color: Colors.orange, fontSize: 12)),
+                ),
               Row(children: [Expanded(child: _buildTextField("Make", _makeController)), const SizedBox(width: 10), Expanded(child: _buildTextField("Model", _modelController))]),
               Row(children: [Expanded(child: _buildTextField("Colour", _colorController)), const SizedBox(width: 10), Expanded(child: _buildDropdown("Fuel Type", _fuelTypes, _selectedFuel, (v) => setState(() => _selectedFuel = v)))]),
               _buildTextField("Body Type", _bodyTypeController),
@@ -1081,6 +1286,8 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
                 Expanded(child: _buildStatusDropdown("RC Status", _rcStatus, "VALID", "INVALID", (v) => setState(() => _rcStatus = v)))
               ]),
               _buildTextField("Manufactured Date", _mfgDateController, isDate: true),
+              // Only TVS Credit's report prints it (page 3, Additional Details).
+              if (_isTvs) _buildTextField("Estimated Life Remaining (years) *", _lifeController),
               Row(children: [Expanded(child: _buildTextField("Stencil URL", _stencilUrlController)), const SizedBox(width: 10), Expanded(child: _buildTextField("Chassis Photo URL", _chassisUrlController))]),
             ]),
 
@@ -1103,7 +1310,7 @@ class _BackendCaseDetailsPageState extends State<BackendCaseDetailsPage> {
               ]),
             ),
 
-            if (_isEditing) Container(margin: const EdgeInsets.only(bottom: 20), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.grey.shade300)), child: ExpansionTile(initiallyExpanded: true, title: const Text("Assign Inspection", style: TextStyle(fontWeight: FontWeight.bold)), children: [Padding(padding: const EdgeInsets.all(16), child: DropdownButtonFormField<String>(value: _selectedAssignee, decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.all(12), labelText: "Assign to"), items: _assigneeList.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(), onChanged: (val) => setState(() => _selectedAssignee = val)))])),
+            if (_isEditing) _buildAssignCard(),
 
             if (_isEditing) Column(
               children: [

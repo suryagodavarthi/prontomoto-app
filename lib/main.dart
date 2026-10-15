@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/api_service.dart';
+import 'services/brand.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -15,6 +18,8 @@ import 'firebase_options.dart';
 import 'duplicate_check.dart';
 import 'dashboard_common.dart';
 import 'case_history_page.dart';
+import 'case_search_page.dart';
+import 'case_info_bar.dart';
 
 // ── Role-Based Access Control ─────────────────────────────────────────────────
 // Set once at login; read by all dashboards and case-detail pages.
@@ -66,7 +71,42 @@ const Map<String, String> vehicleSegmentOptions = {
   'three-wheeler': 'Three Wheeler',
   'tractor': 'Tractor',
   'ce': 'Construction Equipment',
+  'bus': 'Bus',
 };
+
+/// The client (stakeholder) dropdown, word for word as the portal lists it.
+///
+/// The exact name matters beyond display: the backend's media-optional rule
+/// (ClientRules__MediaOptionalClients = "IndusInd Bank;Sakthi Finance Limited")
+/// compares names exactly, and the report prints the name as saved. Cases saved
+/// under an older spelling keep it — the pages fall back to the stored name when
+/// it is not in this list.
+const List<String> stakeholderOptions = [
+  'State Bank of India',
+  'HDFC Bank',
+  'ICICI Bank',
+  'Axis Bank',
+  'IndusInd Bank',
+  'Punjab National Bank',
+  'Federal Bank',
+  'Union Bank of India',
+  'Bank of Baroda',
+  'IDFC First Bank',
+  'Karur Vysya Bank',
+  'Kotak Mahindra Bank',
+  'Mahindra & Mahindra Financial Services',
+  'Bajaj Finance Limited',
+  'Hero FinCorp Limited',
+  'TVS Credit Services Limited',
+  'Shriram Finance Limited',
+  'Muthoot Capital Services Limited',
+  'Cholamandalam Investment and Finance Company',
+  'Sundaram Finance Limited',
+  'Manappuram Finance Limited',
+  'Larsen & Toubro Finance',
+  'Equitas Small Finance Bank',
+  'Sakthi Finance Limited',
+];
 
 /// Display label for a stored segment value; tolerates old records that
 /// stored the label itself.
@@ -129,6 +169,7 @@ void main() async {
   } catch (e) {
     debugPrint("Firebase Warning: $e");
   }
+  await Brand.load();
   runApp(const ProntoMotoApp());
 }
 
@@ -137,17 +178,25 @@ class ProntoMotoApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Vehga Inspections',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF007B7B)),
-        primaryColor: const Color(0xFF007B7B),
-        useMaterial3: true,
-        scaffoldBackgroundColor: Colors.white,
-        fontFamily: 'Roboto',
-      ),
-      home: const LoginPage(),
+    // Rebuilt when the login picker changes company, so the whole app takes
+    // that company's colour, as the portal re-themes on data-brand.
+    return ValueListenableBuilder<BrandKey>(
+      valueListenable: Brand.active,
+      builder: (context, _, __) {
+        final brand = Brand.profile;
+        return MaterialApp(
+          title: brand.name,
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(seedColor: brand.color),
+            primaryColor: brand.color,
+            useMaterial3: true,
+            scaffoldBackgroundColor: Colors.white,
+            fontFamily: 'Roboto',
+          ),
+          home: const LoginPage(),
+        );
+      },
     );
   }
 }
@@ -303,8 +352,13 @@ class _LoginPageState extends State<LoginPage> {
       currentUserRoleLevel = level;
 
       // Route by computed level — inherits fuzzy matching from roleLevelOf.
-      // backend/superadmin/stateadmin are kept on BackendDashboard even at level 5.
-      if (roleId == 'backend' || roleId == 'superadmin' || roleId == 'stateadmin') {
+      // Every admin role goes to the all-stages dashboard: the portal shows admins
+      // every open case. SuperAdmin and StateAdmin used to land on the Backend
+      // dashboard, which keeps only Backend-step cases.
+      if (roleId == 'admin' || roleId == 'superadmin' || roleId == 'stateadmin') {
+        Navigator.pushReplacement(context,
+            MaterialPageRoute(builder: (context) => FinalReportDashboard(userName: name)));
+      } else if (roleId == 'backend') {
         Navigator.pushReplacement(context,
             MaterialPageRoute(builder: (context) => BackendDashboard(userName: name)));
       } else if (currentUserRoleLevel >= 5) {
@@ -334,22 +388,64 @@ class _LoginPageState extends State<LoginPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: color));
   }
 
+  /// Company picker, as on the portal's login. Picking repaints the screen in
+  /// that company's colour at once, so it is clear which one you are signing into.
+  Widget _buildBrandPicker() {
+    Widget option(BrandProfile b) {
+      final selected = Brand.active.value == b.key;
+      return Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _isLoading
+              ? null
+              : () {
+                  Brand.select(b.key);
+                  setState(() {});
+                },
+          child: Container(
+            height: 64,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: selected ? b.color.withOpacity(0.06) : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: selected ? b.color : Colors.grey.shade300, width: selected ? 2 : 1),
+            ),
+            child: Image.asset(b.logoAsset, fit: BoxFit.contain, semanticLabel: b.name),
+          ),
+        ),
+      );
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text("Company", style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey[700])),
+      const SizedBox(height: 8),
+      Row(children: [
+        option(brands[BrandKey.vehga]!),
+        const SizedBox(width: 12),
+        option(brands[BrandKey.pronto]!),
+      ]),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final brand = Brand.profile;
     return Scaffold(
       body: SingleChildScrollView(
         child: Column(
           children: [
             Container(
               height: 300,
-              decoration: const BoxDecoration(color: Color(0xFF007B7B), borderRadius: BorderRadius.only(bottomLeft: Radius.circular(50), bottomRight: Radius.circular(50))),
+              decoration: BoxDecoration(color: brand.color, borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(50), bottomRight: Radius.circular(50))),
               child: Center(
-                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Image.asset('assets/vehga-logo.png', width: 160, height: 80, fit: BoxFit.contain, color: Colors.white, colorBlendMode: BlendMode.srcIn),
-                    const SizedBox(height: 20),
-                    const Text('Vehga Inspections', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1.2)),
-                    const Text('Private Limited', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.white, letterSpacing: 1.0)),
-                ]),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      Image.asset(brand.logoAsset, width: 220, height: 70, fit: BoxFit.contain, color: Colors.white, colorBlendMode: BlendMode.srcIn),
+                      const SizedBox(height: 20),
+                      Text(brand.legalName, textAlign: TextAlign.center, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1.0)),
+                  ]),
+                ),
               ),
             ),
             const SizedBox(height: 40),
@@ -360,10 +456,11 @@ class _LoginPageState extends State<LoginPage> {
                   const SizedBox(height: 8),
                   Text(_codeSent ? "Enter the code sent to your mobile" : "Please sign in to continue", style: TextStyle(fontSize: 14, color: Colors.grey[600])),
                   const SizedBox(height: 30),
-                  if (!_codeSent) TextField(controller: _phoneController, keyboardType: TextInputType.phone, decoration: InputDecoration(prefixIcon: const Icon(Icons.phone, color: Color(0xFF007B7B)), prefixText: "+91 ", labelText: "Phone Number", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
+                  if (!_codeSent) ...[_buildBrandPicker(), const SizedBox(height: 24)],
+                  if (!_codeSent) TextField(controller: _phoneController, keyboardType: TextInputType.phone, decoration: InputDecoration(prefixIcon: Icon(Icons.phone, color: brand.color), prefixText: "+91 ", labelText: "Phone Number", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
                   if (_codeSent) TextField(controller: _otpController, keyboardType: TextInputType.number, textAlign: TextAlign.center, maxLength: 6, decoration: InputDecoration(counterText: "", hintText: "------", border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)))),
                   const SizedBox(height: 30),
-                  SizedBox(width: double.infinity, height: 55, child: ElevatedButton(onPressed: _isLoading ? null : (_codeSent ? _handleVerifyOtp : _handleSendOtp), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF007B7B), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : Text(_codeSent ? 'VERIFY & LOGIN' : 'SEND OTP', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)))),
+                  SizedBox(width: double.infinity, height: 55, child: ElevatedButton(onPressed: _isLoading ? null : (_codeSent ? _handleVerifyOtp : _handleSendOtp), style: ElevatedButton.styleFrom(backgroundColor: brand.color, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: _isLoading ? const CircularProgressIndicator(color: Colors.white) : Text(_codeSent ? 'VERIFY & LOGIN' : 'SEND OTP', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)))),
                   if (_codeSent) ...[
                     const SizedBox(height: 12),
                     Row(children: [
@@ -378,13 +475,13 @@ class _LoginPageState extends State<LoginPage> {
                       Expanded(
                         child: TextButton(
                           onPressed: _isLoading ? null : _handleSendOtp,
-                          style: TextButton.styleFrom(foregroundColor: Color(0xFF007B7B)),
+                          style: TextButton.styleFrom(foregroundColor: brand.color),
                           child: const Text("Resend OTP", style: TextStyle(fontWeight: FontWeight.bold)),
                         ),
                       ),
                     ]),
                   ],
-                  if (!_codeSent && _savedPhone != null) ...[const SizedBox(height: 30), const Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 10), child: Text("OR")), Expanded(child: Divider())]), const SizedBox(height: 20), Center(child: GestureDetector(onTap: _handleBiometricLogin, child: Column(children: [Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Color(0xFF007B7B).withOpacity(0.1), shape: BoxShape.circle, border: Border.all(color: Color(0xFF007B7B), width: 2)), child: const Icon(Icons.fingerprint, size: 40, color: Color(0xFF007B7B))), const SizedBox(height: 10), Text("Login as $_savedName", style: const TextStyle(color: Color(0xFF007B7B), fontWeight: FontWeight.bold))])))]
+                  if (!_codeSent && _savedPhone != null) ...[const SizedBox(height: 30), const Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 10), child: Text("OR")), Expanded(child: Divider())]), const SizedBox(height: 20), Center(child: GestureDetector(onTap: _handleBiometricLogin, child: Column(children: [Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: brand.color.withOpacity(0.1), shape: BoxShape.circle, border: Border.all(color: brand.color, width: 2)), child: Icon(Icons.fingerprint, size: 40, color: brand.color)), const SizedBox(height: 10), Text("Login as $_savedName", style: TextStyle(color: brand.color, fontWeight: FontWeight.bold))])))]
               ]),
             ),
           ],
@@ -480,11 +577,13 @@ class _StakeholderDashboardState extends State<StakeholderDashboard> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("Vehga Inspections Private Limited", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15)),
+            Text(Brand.profile.legalName, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15)),
             Text("Hello, ${widget.userName}", style: const TextStyle(color: Colors.grey, fontSize: 12)),
           ],
         ),
         actions: [
+          IconButton(icon: const Icon(Icons.search, color: Colors.black), tooltip: "Search cases",
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CaseSearchPage()))),
           IconButton(icon: const Icon(Icons.refresh, color: Colors.black), onPressed: _loadDashboardData),
           IconButton(icon: const Icon(Icons.logout, color: Colors.red), onPressed: () async {
               await FirebaseAuth.instance.signOut();
@@ -708,14 +807,6 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
   String? _otherPath;
 
   List<String> _locationList = []; 
-  final List<String> _stakeholderList = [
-    "State Bank of India (SBI)", "HDFC Bank", "ICICI Bank", "Axis Bank", "IndusInd Bank",
-    "Punjab National Bank (PNB)", "Federal Bank", "Union Bank of India", "Bank of Baroda",
-    "IDFC FIRST Bank", "Karur Vysya Bank", "Kotak Mahindra Bank", "Mahindra Finance",
-    "Bajaj Finserv", "Hero FinCorp", "TVS Credit Services", "Shriram Finance",
-    "Muthoot Capital Services", "Cholamandalam Investment and Finance Company",
-    "Sundaram Finance", "Manappuram Finance", "L&T Finance"
-  ];
   final List<String> _valuationTypes = valuationTypeOptions;
   final List<String> _vehicleSegments = vehicleSegmentOptions.values.toList();
   String? _selectedVehicleSegment;
@@ -794,17 +885,25 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
     }
   }
 
+  /// The case this form writes to. Null until the first Save or Submit creates
+  /// it; every later Save or Submit updates that same case, as the portal does.
+  String? _caseId;
+
   void _handleDataSubmission({required bool exitPage}) async {
     if (!_formKey.currentState!.validate()) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please fix the errors in red"), backgroundColor: Colors.red));
       return;
     }
+    final vn = _vehicleNoController.text.trim();
+    final ac = _applicantContactController.text.trim();
     setState(() => _isLoading = true);
-    
-    // Warn about duplicate vehicles before creating (portal parity).
+
+    // Warn about duplicate vehicles before creating (portal parity). After a
+    // draft save the case exists, so leave it out of its own duplicate check.
     final proceed = await checkDuplicatesAndConfirm(
       context,
-      vehicleNumber: _vehicleNoController.text,
+      vehicleNumber: vn,
+      excludeId: _caseId,
       confirmMode: true,
     );
     if (!proceed) {
@@ -829,49 +928,115 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
       "State": _stateController.text,
       "Country": _countryController.text,
       "ApplicantName": _applicantNameController.text,
-      "ApplicantContact": _applicantContactController.text,
+      "ApplicantContact": ac,
+      "ApplicantAlternativeContact": _applicantAltContactController.text,
       "Remarks": _remarksController.text,
-      "VehicleNumber": _vehicleNoController.text,
+      "VehicleNumber": vn,
       "Pincode": _pincodeController.text,
     };
 
     ApiService api = ApiService();
-    var result = await api.createValuation(formData, rcPath: _rcPath, insurancePath: _insurancePath, otherPath: _otherPath);
+    var result = await api.createValuation(formData, id: _caseId, rcPath: _rcPath, insurancePath: _insurancePath, otherPath: _otherPath);
 
     if (!mounted) return;
 
-    if (result["success"] == true) {
-      String newId = result["id"].toString();
-
-      await api.startInitialWorkflow(newId, _vehicleNoController.text, _applicantContactController.text);
-      await api.addWorkflowHistory(
-        valuationId: newId,
-        action: exitPage ? "Case Created & Submitted" : "Case Created (Draft)",
-        remarks: "Vehicle ${_vehicleNoController.text}",
-        performedByUserId: currentUserId,
-        performedByUserName: currentUserName,
-        statusFrom: null,
-        statusTo: exitPage ? "Backend" : "Stakeholder",
-      );
-
-      if (exitPage) {
-        var advanced = await api.advanceToNextStage(newId, 1, _vehicleNoController.text, _applicantContactController.text);
-        if (!mounted) return;
-        setState(() => _isLoading = false);
-        if (advanced["success"] == true) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Successfully Submitted to Backend!"), backgroundColor: Colors.green));
-          Navigator.pop(context);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Saved, but Submit failed: ${advanced['message']}"), backgroundColor: Colors.orange));
-        }
-      } else {
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Draft Saved Successfully!"), backgroundColor: Colors.green));
-      }
-    } else {
+    if (result["success"] != true) {
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result["message"] ?? "Unknown Error"), backgroundColor: Colors.red));
+      return;
     }
+
+    final String caseId = result["id"].toString();
+    // The vehicle number and contact are the case's key from here on, so they
+    // lock once it exists (see the Vehicle Details and Applicant sections).
+    setState(() => _caseId = caseId);
+
+    await api.startInitialWorkflow(caseId, vn, ac);
+
+    if (!exitPage) {
+      // Portal onSave: the workflow row is what puts the case on the dashboard.
+      await api.updateWorkflowTable(caseId, vn, ac, {"workflow": "Stakeholder", "workflowStepOrder": 1});
+      await api.addWorkflowHistory(
+        valuationId: caseId,
+        action: "Stakeholder Saved",
+        remarks: "New stakeholder details have been saved",
+        performedByUserId: currentUserId,
+        performedByUserName: currentUserName,
+      );
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Stakeholder details saved"), backgroundColor: Colors.green));
+      return;
+    }
+
+    var advanced = await api.advanceToNextStage(caseId, 1, vn, ac);
+    if (!mounted) return;
+    if (advanced["success"] != true) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Saved, but Submit failed: ${advanced['message']}"), backgroundColor: Colors.orange));
+      return;
+    }
+
+    // Portal onSubmit: record who registered the case, and look the RC up now
+    // so the Backend page opens on it rather than waiting for Surepass.
+    await api.updateWorkflowTable(caseId, vn, ac, {
+      "workflow": "Backend",
+      "workflowStepOrder": 2,
+      "stakeholderAssignedTo": currentUserName,
+      "stakeholderAssignedToPhoneNumber": currentUserPhone,
+      "stakeholderAssignedToWhatsapp": currentUserPhone,
+    });
+    await api.assignStakeholder(caseId, vn, ac,
+        name: currentUserName, phone: currentUserPhone, whatsapp: currentUserPhone);
+    unawaited(api.getBackendVehicleDetails(caseId, vn, ac));
+    await api.addWorkflowHistory(
+      valuationId: caseId,
+      action: "Stakeholder Submitted",
+      remarks: "Stakeholder details submitted to Backend team",
+      performedByUserId: currentUserId,
+      performedByUserName: currentUserName,
+      statusFrom: "Stakeholder In Progress",
+      statusTo: "Backend In Progress",
+    );
+
+    // The reference the case will be known by. Completing the stakeholder step
+    // mints it in the background, so this may assign it instead; the endpoint
+    // is idempotent either way.
+    final reference = await api.getReferenceNumber(caseId, vn, ac);
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    await _showRegistered(reference);
+    if (mounted) Navigator.pop(context);
+  }
+
+  /// "Case registered — reference VG-…", with Copy, as the portal shows it.
+  Future<void> _showRegistered(String? reference) {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.check_circle, color: Colors.green, size: 40),
+        title: const Text("Case registered"),
+        content: reference == null
+            ? const Text("Submitted to Backend.")
+            : Column(mainAxisSize: MainAxisSize.min, children: [
+                const Text("Unique ID"),
+                const SizedBox(height: 6),
+                SelectableText(reference, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+              ]),
+        actions: [
+          if (reference != null)
+            TextButton.icon(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: reference));
+                ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text("Unique ID copied")));
+              },
+              icon: const Icon(Icons.copy, size: 16),
+              label: const Text("Copy"),
+            ),
+          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text("Done")),
+        ],
+      ),
+    );
   }
 
   void _toggleSameAsContact(bool? value) {
@@ -903,7 +1068,7 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
                   title: "Stakeholder", 
                   isOpen: true,
                   children: [
-                    _buildDropdown("Name of Stakeholder*", _stakeholderList, _selectedStakeholder, (val) => setState(() => _selectedStakeholder = val)),
+                    _buildDropdown("Name of Stakeholder*", stakeholderOptions, _selectedStakeholder, (val) => setState(() => _selectedStakeholder = val)),
                     const SizedBox(height: 10),
                     _buildTextField("Branch", _branchController),
                     const SizedBox(height: 10),
@@ -958,7 +1123,7 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
                     Row(children: [
                       Expanded(child: _buildTextField("Applicant Name*", _applicantNameController, isRequired: true)),
                       const SizedBox(width: 10),
-                      Expanded(child: _buildTextField("Applicant Contact*", _applicantContactController, inputType: TextInputType.phone, isRequired: true)),
+                      Expanded(child: _buildTextField("Applicant Contact*", _applicantContactController, inputType: TextInputType.phone, isRequired: true, enabled: _caseId == null)),
                     ]),
                     const SizedBox(height: 10),
                     _buildTextField("Alternative Contact", _applicantAltContactController, inputType: TextInputType.phone),
@@ -979,7 +1144,7 @@ class _CreateRequestPageState extends State<CreateRequestPage> {
                _buildAccordionSection(
                   title: "Vehicle Details",
                   children: [
-                    _buildTextField("Vehicle Number*", _vehicleNoController, isRequired: true),
+                    _buildTextField("Vehicle Number*", _vehicleNoController, isRequired: true, enabled: _caseId == null),
                     const SizedBox(height: 10),
                     _buildDropdown("Vehicle Segment*", _vehicleSegments, _selectedVehicleSegment, (val) => setState(() => _selectedVehicleSegment = val)),
                   ]
@@ -1148,14 +1313,6 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
   Map<String, dynamic> _fullData = {};
   List<dynamic> _notes = [];
 
-  final List<String> _stakeholderList = [
-    "State Bank of India (SBI)", "HDFC Bank", "ICICI Bank", "Axis Bank", "IndusInd Bank", 
-    "Punjab National Bank (PNB)", "Federal Bank", "Union Bank of India", "Bank of Baroda", 
-    "IDFC FIRST Bank", "Karur Vysya Bank", "Kotak Mahindra Bank", "Mahindra Finance", 
-    "Bajaj Finserv", "Hero FinCorp", "TVS Credit Services", "Shriram Finance", 
-    "Muthoot Capital Services", "Cholamandalam Investment and Finance Company", 
-    "Sundaram Finance", "Manappuram Finance", "L&T Finance"
-  ];
   final List<String> _valuationTypes = valuationTypeOptions;
   final List<String> _vehicleSegments = vehicleSegmentOptions.values.toList();
   String? _selectedVehicleSegment;
@@ -1281,7 +1438,7 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
     _branchController.text = _getUniversalValue(d, ['Branch', 'branch']);
 
     String currentStakeholder = _getUniversalValue(d, ['Name', 'stakeholderName', 'name', 'stakeholder.name']);
-    if (_stakeholderList.contains(currentStakeholder)) _selectedStakeholder = currentStakeholder;
+    if (stakeholderOptions.contains(currentStakeholder)) _selectedStakeholder = currentStakeholder;
     
     String currentValType = _getUniversalValue(d, ['ValuationType', 'valuationType']);
     if (_valuationTypes.contains(currentValType)) _selectedValuationType = currentValType;
@@ -1682,6 +1839,11 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
                 Expanded(child: ElevatedButton(onPressed: () => Navigator.pop(context), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF4081), foregroundColor: Colors.white), child: const Text("Back")))
               ]),
             const SizedBox(height: 20),
+            CaseInfoBar(
+              valuationId: (widget.summaryData['valuationId'] ?? widget.summaryData['id'] ?? '').toString(),
+              vehicleNumber: (widget.summaryData['vehicleNumber'] ?? '').toString(),
+              applicantContact: (widget.summaryData['applicantContact'] ?? '').toString(),
+            ),
 
             Container(
               padding: const EdgeInsets.all(16),
@@ -1691,7 +1853,7 @@ class _VehicleDetailsPageState extends State<VehicleDetailsPage> {
             ),
 
             _buildSection(title: "Stakeholder", isOpen: true, children: [
-               if (_isEditing) _buildDropdown("Name of Stakeholder", _stakeholderList, _selectedStakeholder, (val) => setState(() => _selectedStakeholder = val), isMandatory: true) else _buildField("Name of Stakeholder", _getUniversalValue(d, ['Name', 'stakeholderName', 'name']), null, isMandatory: true),
+               if (_isEditing) _buildDropdown("Name of Stakeholder", stakeholderOptions, _selectedStakeholder, (val) => setState(() => _selectedStakeholder = val), isMandatory: true) else _buildField("Name of Stakeholder", _getUniversalValue(d, ['Name', 'stakeholderName', 'name']), null, isMandatory: true),
                _buildField("Branch", "", _branchController),
                _buildField("Executive Name", "", _executiveNameController, isMandatory: true),
                _buildField("Contact Number", "", _contactController, isMandatory: true),

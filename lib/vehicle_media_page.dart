@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'dart:convert';
 import 'services/api_service.dart';
+import 'services/brand.dart';
 import 'custom_camera_page.dart';
 
 // Simple holder so we can store camera bytes and file-picker bytes the same way.
@@ -127,6 +128,40 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
     "Working / Operation Photo": "workingOperationPhoto",
   };
 
+  /// Slots that never block saving — the portal's `optional: true` media fields.
+  static const Set<String> _optionalSlots = {
+    "Dashboard",
+    "Instrument Cluster",
+    "Gear (Interior)",
+    "Front Seat",
+    "Rear Seat",
+    "Dashboard Close-up",
+    "Underbody",
+    "Tire - Front Left",
+    "Tire - Front Right",
+    "Tire - Rear Left",
+    "Tire - Rear Right",
+  };
+
+  /// The portal's wording where it differs from the slot name.
+  static const Map<String, String> _portalLabels = {
+    "Instrument Cluster": "Instrument Cluster / Odometer",
+    "Chassis Imprint": "Chassis Imprint (scratched on metal)",
+    "Dashboard Close-up": "Dashboard Close-up (controls)",
+    "Selfie with Vehicle": "Selfie of Inspector with Vehicle",
+  };
+
+  /// Some clients send only a few photos and sometimes no video, so nothing is
+  /// required on their cases. The backend decides which clients and says so in
+  /// its photo check; until it answers, the page shows the usual split.
+  bool _mediaOptional = false;
+
+  bool _isMissingMandatory(String uiKey) {
+    if (_mediaOptional || _optionalSlots.contains(uiKey)) return false;
+    final url = _getBackendUrl(uiKey);
+    return _localFiles[uiKey] == null && (url == null || !url.startsWith("http"));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -175,7 +210,7 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
         "vehicleNumber": _vNo.trim(),
         "applicantContact": _contact.trim()
       });
-      final response = await http.get(uri);
+      final response = await apiHttp.get(uri);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         setState(() {
@@ -190,6 +225,8 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
       debugPrint("Failed to fetch latest photos: $e");
     }
     await _fetchPhotoExtras();
+    final check = await ApiService().checkMandatoryPhotos(widget.valuationId, _vNo, _contact);
+    if (mounted && check['mediaOptional'] == true) setState(() => _mediaOptional = true);
   }
 
   /// Loads photo metadata (geo/time captions) and camera-app custom photos.
@@ -587,7 +624,7 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
         contentType: mediaType,
       ));
 
-      final response = await request.send();
+      final response = await apiHttp.send(request);
       if (response.statusCode == 200 || response.statusCode == 204) {
         // Save the capture time + stamped location for live camera shots
         // (shown on the portal and in the report). File picks may be older
@@ -657,12 +694,15 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
     final hasLocal = localFile != null;
     final hasBackend = backendUrl != null && backendUrl.startsWith("http");
 
+    final missingMandatory = _isMissingMandatory(title);
     final borderColor = hasLocal
         ? Colors.blue.shade600
         : hasBackend
             ? Colors.green.shade600
-            : Colors.grey.shade300;
-    final borderWidth = (hasLocal || hasBackend) ? 3.0 : 1.0;
+            : missingMandatory
+                ? Colors.red.shade300
+                : Colors.grey.shade300;
+    final borderWidth = (hasLocal || hasBackend) ? 3.0 : (missingMandatory ? 2.0 : 1.0);
 
     // Label & colours for the action button
     final String btnLabel;
@@ -826,7 +866,7 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
           // ── Label ─────────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4.0),
-            child: Text(title,
+            child: Text(_portalLabels[title] ?? title,
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
                 maxLines: 1,
@@ -1148,6 +1188,39 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
     );
   }
 
+  // ── GROUPS ────────────────────────────────────────────────────────────────
+
+  Widget _buildSlotGroup(String title, String hint, List<String> keys) {
+    final uploaded = keys.where((k) {
+      final url = _getBackendUrl(k);
+      return url != null && url.startsWith("http");
+    }).length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+          Text("$uploaded / ${keys.length} uploaded", style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+        ]),
+        const SizedBox(height: 2),
+        Text(hint, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+        const SizedBox(height: 10),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 220,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 0.75,
+          ),
+          itemCount: keys.length,
+          itemBuilder: (context, index) => _buildMediaCard(keys[index], isVideo: keys[index].contains("Video")),
+        ),
+      ]),
+    );
+  }
+
   // ── BUILD ─────────────────────────────────────────────────────────────────
 
   @override
@@ -1230,23 +1303,16 @@ class _VehicleMediaPageState extends State<VehicleMediaPage> {
                       ),
                     ),
 
-                  GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 220,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                      childAspectRatio: 0.75,
-                    ),
-                    itemCount: _localFiles.length,
-                    itemBuilder: (context, index) {
-                      final key = _localFiles.keys.elementAt(index);
-                      return _buildMediaCard(key,
-                          isVideo: key.contains("Video"));
-                    },
-                  ),
+                  if (_mediaOptional)
+                    _buildSlotGroup("Photos",
+                        "Nothing here is required for this client. Upload whatever photos and video you have.",
+                        _localFiles.keys.toList())
+                  else ...[
+                    _buildSlotGroup("Mandatory Photos", "All of these are required before the inspection can be saved.",
+                        _localFiles.keys.where((k) => !_optionalSlots.contains(k)).toList()),
+                    _buildSlotGroup("Optional Photos", "Upload these when they apply — they never block saving.",
+                        _localFiles.keys.where(_optionalSlots.contains).toList()),
+                  ],
 
                   _buildCustomPhotosSection(),
 

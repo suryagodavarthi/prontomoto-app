@@ -8,8 +8,6 @@
 // Falls back to the legacy /workflows/open + client-side step filter when the
 // stats endpoint is unavailable.
 
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'services/api_service.dart';
 import 'main.dart';
@@ -41,26 +39,27 @@ bool _isAdminRole(String role) {
   return r == 'admin' || r == 'stateadmin' || r == 'superadmin';
 }
 
-/// assignedStates/assignedDistricts are stored either as a JSON array string
-/// or a real list — same tolerant parsing as the portal's parseJsonArray().
-List<String> _parseJsonArray(dynamic value) {
-  if (value == null) return [];
-  if (value is List) return value.map((e) => e.toString()).toList();
-  if (value is String && value.trim().isNotEmpty) {
-    try {
-      final decoded = jsonDecode(value);
-      if (decoded is List) return decoded.map((e) => e.toString()).toList();
-    } catch (_) {}
-  }
-  return [];
-}
-
 void _sortByCreatedAtDesc(List<dynamic> list) {
   list.sort((a, b) {
     final da = (a is Map ? (a['createdAt'] ?? '') : '').toString();
     final db = (b is Map ? (b['createdAt'] ?? '') : '').toString();
     return db.compareTo(da);
   });
+}
+
+/// How long a completed case stays on the dashboard after approval, as the
+/// portal's COMPLETED_VISIBLE_DAYS. A display rule only: search still finds it.
+const int completedVisibleDays = 30;
+
+List<dynamic> _withinCompletedWindow(List<dynamic> rows) {
+  final cutoff = DateTime.now().subtract(const Duration(days: completedVisibleDays));
+  return rows.where((v) {
+    if (v is! Map) return true;
+    final t = (v['completedAt'] ?? v['updatedAt'] ?? v['createdAt'])?.toString();
+    if (t == null || t.isEmpty) return true; // no date: keep rather than hide
+    final d = DateTime.tryParse(t);
+    return d == null || !d.isBefore(cutoff);
+  }).toList();
 }
 
 /// Loads dashboard data for the current user.
@@ -78,24 +77,14 @@ Future<DashboardData> loadDashboardData({bool Function(Map c)? stepMatcher}) asy
   }
 
   // ── Admin path ──────────────────────────────────────────────────────────
+  // As the portal does: Admin, StateAdmin and SuperAdmin are exempt from
+  // assignment, so they see every open case, at every stage, whatever states or
+  // districts their user record lists. Filtering them by area, and by the
+  // calling dashboard's stage, hid most cases from admins.
   if (_isAdminRole(role)) {
-    List<dynamic> open = [];
-    try {
-      final userDoc = phone.isNotEmpty ? await api.getUserById(phone) : <String, dynamic>{};
-      final districts = _parseJsonArray(userDoc['assignedDistricts']);
-      final states = _parseJsonArray(userDoc['assignedStates']);
-      if (districts.isNotEmpty) {
-        open = await api.getWorkflowsByDistricts(districts);
-      } else if (states.isNotEmpty) {
-        open = await api.getWorkflowsByStates(states);
-      } else {
-        open = await api.getOpenValuations();
-      }
-    } catch (_) {
-      open = await api.getOpenValuations();
-    }
-    final completed = await api.getCompletedCases();
-    final scopedOpen = applyMatcher(open);
+    final open = await api.getOpenValuations();
+    final completed = _withinCompletedWindow(await api.getCompletedCases());
+    final scopedOpen = List<dynamic>.from(open);
     _sortByCreatedAtDesc(scopedOpen);
     _sortByCreatedAtDesc(completed);
     return DashboardData(
@@ -114,8 +103,8 @@ Future<DashboardData> loadDashboardData({bool Function(Map c)? stepMatcher}) asy
     final stats = await api.getUserDashboardStats(phone, role);
     if (stats != null) {
       final open = (stats['openCases'] is List) ? List<dynamic>.from(stats['openCases']) : <dynamic>[];
-      final completed =
-          (stats['completedCases'] is List) ? List<dynamic>.from(stats['completedCases']) : <dynamic>[];
+      final completed = _withinCompletedWindow(
+          (stats['completedCases'] is List) ? List<dynamic>.from(stats['completedCases']) : <dynamic>[]);
       _sortByCreatedAtDesc(open);
       _sortByCreatedAtDesc(completed);
       return DashboardData(
