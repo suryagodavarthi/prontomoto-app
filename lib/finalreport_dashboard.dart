@@ -1,19 +1,27 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:http/http.dart' as http;
-import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'services/api_service.dart';
+import 'services/brand.dart';
 import 'main.dart';
 import 'avo_dashboard.dart';
 import 'qc_dashboard.dart';
 import 'dashboard_common.dart';
 import 'case_history_page.dart';
+import 'case_search_page.dart';
+import 'case_info_bar.dart';
+import 'report_preview_page.dart';
+import 'report_paper_view.dart';
+import 'qc_review_page.dart';
+import 'qc_checklist.dart' show buildQcChecklist, applySavedChecklist;
+import 'inspection_score.dart' show scoreInspection;
+import 'date_format.dart';
 
 // =============================================================================
 // FINAL REPORT DASHBOARD — list of cases in FinalReport step (step 5)
@@ -132,14 +140,16 @@ class _FinalReportDashboardState extends State<FinalReportDashboard> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              "Vehga — Final Report",
-              style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 17),
+            Text(
+              "${Brand.profile.name} — ${const {'admin', 'superadmin', 'stateadmin'}.contains(currentUserRole) ? 'All Cases' : 'Final Report'}",
+              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 17),
             ),
             Text("Hello, ${widget.userName}", style: const TextStyle(color: Colors.grey, fontSize: 12)),
           ],
         ),
         actions: [
+          IconButton(icon: const Icon(Icons.search, color: Colors.black), tooltip: "Search cases",
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CaseSearchPage()))),
           IconButton(icon: const Icon(Icons.refresh, color: Colors.black), onPressed: _load),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.red),
@@ -307,31 +317,43 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
   final _formKey = GlobalKey<FormState>();
 
   bool _isLoading = true;
-  bool _isEditing = false;
   bool _isCompleting = false;
   bool _isReturning = false;
-  bool _isReturningReport = false;
   bool _downloadingPdf = false;
 
   // Server data
   Map<String, dynamic> _finalReport = {};
   Map<String, dynamic> _workflowTable = {};
-  Map<String, dynamic> _paymentData = {};
   List<dynamic> _notes = [];
 
   // Return banner
   String? _returnedBy;
   String? _returnMessage;
 
-  // Payment / completion fields
-  final List<String> _paymentStatuses = ["Pending", "Completed", "Failed"];
-  final List<String> _paymentMethods = ["Online", "Cash", "Card", "UPI"];
-  String _selectedPaymentStatus = "Completed";
-  String _selectedPaymentMethod = "Online";
-  final _paymentReferenceController = TextEditingController();
-  final _paymentDateController = TextEditingController();
-  final _paymentAmountController = TextEditingController(text: '800');
-  final _remarksController = TextEditingController();
+  // The report, as the portal's Final Report page lays it out.
+  String? _reference;
+  num? _lowRange;
+  num? _midRange;
+  num? _highRange;
+  bool _rangeLoading = false;
+  List<String> _selectedPhotoKeys = [];
+  Map<String, String?> _cl = {};
+  Map<String, String> _clRemarks = {};
+  double? _overallScore;
+  double? _brakesScore;
+
+  /// Approved once the workflow row reads Completed: Approve completes step 5,
+  /// which sets it. The download stays locked until then, as in the portal,
+  /// because an unapproved report is indistinguishable from a final one.
+  bool get _caseApproved =>
+      (_workflowTable['status'] ?? _workflowTable['Status'] ?? '').toString().trim().toLowerCase() == 'completed';
+
+  /// Approve, return or reject: final report staff and every admin.
+  bool get _canDecide {
+    const perms = ['CanCreateFinalReport', 'CanEditFinalReport', 'Admin', 'StateAdmin', 'SuperAdmin'];
+    final held = {...currentUserRoles.map((r) => r.toLowerCase()), currentUserRole.toLowerCase()};
+    return perms.any((p) => held.contains(p.toLowerCase()));
+  }
 
   // Note adder
   final _noteController = TextEditingController();
@@ -344,10 +366,6 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
 
   @override
   void dispose() {
-    _paymentReferenceController.dispose();
-    _paymentDateController.dispose();
-    _paymentAmountController.dispose();
-    _remarksController.dispose();
     _noteController.dispose();
     super.dispose();
   }
@@ -380,26 +398,22 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
         api.getFinalReport(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!),
         api.getWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!),
         api.getNotes(ctx["id"]!),
-        api.getPayment(ctx["id"]!),
       ]);
 
       if (!mounted) return;
       final report = results[0] as Map<String, dynamic>;
       final table = results[1] as Map<String, dynamic>;
       final notes = results[2] as List<dynamic>;
-      final payment = results[3] as Map<String, dynamic>;
 
       setState(() {
         _finalReport = report;
         _workflowTable = table;
         _notes = notes;
-        _paymentData = payment;
-
-        _populatePaymentFields(payment);
         _checkReturnStatus(table);
-
+        _deriveReport();
         _isLoading = false;
       });
+      _loadReportExtras();
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -410,19 +424,85 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
     }
   }
 
-  void _populatePaymentFields(Map<String, dynamic> data) {
-    final pStatus = _readStr(data, ['paymentStatus']);
-    _selectedPaymentStatus =
-        _paymentStatuses.contains(pStatus) ? pStatus : 'Completed';
-    final pMethod = _readStr(data, ['paymentMethod']);
-    _selectedPaymentMethod =
-        _paymentMethods.contains(pMethod) ? pMethod : 'Online';
-    _paymentReferenceController.text = _readStr(data, ['paymentReference']);
-    _paymentDateController.text =
-        _fmtDate(_readStr(data, ['paymentDate']));
-    final amt = _readStr(data, ['paymentAmount']);
-    _paymentAmountController.text = amt.isNotEmpty ? amt : '800';
-    _remarksController.text = _readStr(data, ['remarks']);
+  /// The checklist, scores and remarks the report prints, from the same engine the
+  /// QC page uses, with QC's saved verdicts on top — the portal's prefillChecklist
+  /// followed by applySavedChecklist.
+  void _deriveReport() {
+    final qc = _finalReport['qualityControl'] is Map ? Map<String, dynamic>.from(_finalReport['qualityControl']) : <String, dynamic>{};
+    final segment = _readStr(_finalReport, ['stakeholder.vehicleSegment']);
+    final type = widget.summaryData['valuationType']?.toString();
+
+    final scored = scoreInspection(
+      segment,
+      _finalReport['inspectionDetails'] is Map ? Map<String, dynamic>.from(_finalReport['inspectionDetails']) : null,
+      fallbackType: type,
+    );
+    _overallScore = scored.overall;
+    _brakesScore = scored.sections.where((x) => x.section == 'BRAKES').map((x) => x.score).firstOrNull;
+
+    final photos = _finalReport['photoUrls'];
+    final photoKeys = photos is Map
+        ? [for (final e in photos.entries) if (e.value != null && e.value.toString().isNotEmpty) e.key.toString()]
+        : <String>[];
+    final result = buildQcChecklist(
+      report: _finalReport,
+      overallRating: (qc['overallRating'] ?? '').toString(),
+      chassisPunch: (qc['chassisPunch'] ?? '').toString(),
+      photoKeys: photoKeys,
+      vehicleSegment: segment,
+      valuationType: type,
+    );
+    applySavedChecklist(result, qc['qcChecklist'] is Map ? qc['qcChecklist'] as Map : null, null);
+    _cl = result.cl;
+    final remarks = qc['qcChecklistRemarks'];
+    _clRemarks = remarks is Map
+        ? {for (final e in remarks.entries) if (e.value != null) e.key.toString(): e.value.toString()}
+        : {};
+  }
+
+  /// "8.2", as the portal's getRatingDisplay: the derived score, else the saved rating.
+  String? get _ratingDisplay {
+    if (_overallScore != null) return _overallScore!.toStringAsFixed(1);
+    final raw = _readStr(_finalReport, ['qualityControl.overallRating']).trim();
+    if (raw.isEmpty) return null;
+    final n = double.tryParse(raw);
+    if (n != null) return n.toStringAsFixed(1);
+    const words = {'EXCELLENT': '9.5', 'VERY GOOD': '8.5', 'GOOD': '7.5', 'AVERAGE': '5.0', 'BELOW AVERAGE': '3.5', 'POOR': '2.5', 'VERY POOR': '1.5'};
+    return words[raw.toUpperCase()] ?? raw;
+  }
+
+  /// The Unique ID, QC's photo selection, and the market range (asked for when
+  /// the case has none, as the portal's ensureRange does).
+  Future<void> _loadReportExtras() async {
+    final ctx = _ctx();
+    num? n(String path) => num.tryParse(_readStr(_finalReport, [path]));
+    setState(() {
+      _lowRange = n('valuationResponse.lowRange');
+      _midRange = n('valuationResponse.midRange');
+      _highRange = n('valuationResponse.highRange');
+    });
+    final results = await Future.wait([
+      api.getReferenceNumber(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!),
+      api.getGallerySelection(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _reference = results[0] as String?;
+      _selectedPhotoKeys = results[1] as List<String>;
+    });
+
+    if ((_lowRange ?? 0) > 0 && (_highRange ?? 0) > 0) return;
+    setState(() => _rangeLoading = true);
+    final range = await api.getMarketRange(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
+    if (!mounted) return;
+    setState(() {
+      _rangeLoading = false;
+      if (range != null) {
+        _lowRange = range['lowRange'];
+        _midRange = range['midRange'];
+        _highRange = range['highRange'];
+      }
+    });
   }
 
   /// Mirrors the web portal's return status check for FinalReport step.
@@ -476,112 +556,94 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
   // KEY ACTIONS
   // ---------------------------------------------------------------------------
 
-  Future<void> _onComplete() async {
-    if (!(_formKey.currentState?.validate() ?? false)) {
-      _showError("Please fill all required fields (*)");
-      return;
-    }
+  /// The portal's Approve Case: completing step 5 with the approver's name. The
+  /// backend closes the workflow row and dispatches the report; payment is no
+  /// longer written here (it has its own page).
+  Future<void> _onApprove() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Approve Case"),
+        content: const Text("Once approved, the final report will be marked complete and dispatched."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF10B981)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Approve"),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
     setState(() => _isCompleting = true);
     final ctx = _ctx();
-    final user = FirebaseAuth.instance.currentUser;
-    final completedBy = user?.displayName ??
-        user?.email?.split('@').first ??
-        user?.phoneNumber ??
-        'FinalReport Reviewer';
-    final phone = user?.phoneNumber ?? '';
-    final email = user?.email ?? '';
-
-    final paymentDateIso = _paymentDateController.text.isEmpty
-        ? DateTime.now().toUtc().toIso8601String()
-        : (DateTime.tryParse(_paymentDateController.text) ?? DateTime.now())
-            .toUtc()
-            .toIso8601String();
-
-    // 1. POST /valuationresponse/complete — marks the Cosmos document as completed
-    //    Matches Angular ValuationResponseService.completeValuationResponse()
-    final completeRes = await api.completeValuationResponse(
-      valuationId: ctx["id"]!,
-      vehicleNumber: ctx["vNo"]!,
-      applicantContact: ctx["contact"]!,
-      completedBy: completedBy,
-      completedByPhone: phone,
-      completedByEmail: email,
-      paymentStatus: _selectedPaymentStatus,
-      paymentReference: _paymentReferenceController.text,
-      paymentDate: paymentDateIso,
-      paymentMethod: _selectedPaymentMethod,
-      paymentAmount: _paymentAmountController.text.trim(),
-      remarks: _remarksController.text,
-    );
+    final approvedBy = currentUserName.isNotEmpty ? currentUserName : (currentUserPhone.isNotEmpty ? currentUserPhone : 'Unknown');
+    final res = await api.completeWorkflow(ctx["id"]!, 5, ctx["vNo"]!, ctx["contact"]!, approvedBy: approvedBy);
     if (!mounted) return;
-    if (completeRes['success'] != true) {
+    if (res['success'] != true) {
       setState(() => _isCompleting = false);
-      _showError("Complete failed: ${completeRes['message']}");
+      _showError("Approval failed: ${res['message']}");
       return;
     }
-
-    // 2. Also save to dedicated /payments endpoint (belt-and-suspenders)
-    final payRes = await api.savePayment(
-      valuationId: ctx["id"]!,
-      vehicleNumber: ctx["vNo"]!,
-      applicantContact: ctx["contact"]!,
-      paymentStatus: _selectedPaymentStatus,
-      paymentReference: _paymentReferenceController.text,
-      paymentDate: paymentDateIso,
-      paymentMethod: _selectedPaymentMethod,
-      paymentAmount:
-          num.tryParse(_paymentAmountController.text.trim()) ?? 0,
-    );
-    if (!mounted) return;
-    if (payRes['success'] != true) {
-      debugPrint("WARN: Payment endpoint save failed (non-fatal): ${payRes['message']}");
-    }
-
-    // 3. completeWorkflow(5) — closes the FinalReport workflow step in Cosmos
-    final wfRes =
-        await api.completeWorkflow(ctx["id"]!, 5, ctx["vNo"]!, ctx["contact"]!);
-    if (!mounted) return;
-    if (wfRes['success'] != true) {
-      debugPrint("WARN: completeWorkflow(5) failed (non-fatal): ${wfRes['message']}");
-    }
-
-    // 4. Update workflow table to Completed
-    await api.updateWorkflowTable(
-      ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
-      {
-        "workflow": "FinalReport",
-        "workflowStepOrder": 5,
-        "status": "Completed",
-        "assignedTo": completedBy,
-        "assignedToPhoneNumber": phone,
-        "assignedToEmail": email,
-        "assignedToWhatsapp": phone,
-        "finalReportAssignedTo": completedBy,
-        "finalReportAssignedToPhoneNumber": phone,
-        "finalReportAssignedToEmail": email,
-        "finalReportAssignedToWhatsapp": phone,
-      },
-    );
-    if (!mounted) return;
-
-    // 5. Assign FinalReport role (web portal does this on complete)
-    await api.assignValuation(
-        ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, completedBy, phone, email, phone);
-    if (!mounted) return;
-
     await api.addWorkflowHistory(
       valuationId: ctx["id"]!,
       action: "Valuation Completed",
-      remarks: "Final report approved by $completedBy",
+      remarks: "Final report approved by $approvedBy",
       performedByUserId: currentUserId,
       performedByUserName: currentUserName,
       statusFrom: "FinalReport",
       statusTo: "Completed",
     );
+    // Stay on the page: approving is what unlocks the download, so leaving for
+    // the case list would send the approver straight back here.
+    final table = await api.getWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
     if (!mounted) return;
+    setState(() {
+      _isCompleting = false;
+      _workflowTable = table.isNotEmpty ? table : {..._workflowTable, "status": "Completed"};
+    });
+    _showSuccess("Case approved. Final report has been dispatched — you can now download the PDF.");
+  }
 
-    setState(() => _isCompleting = false);
-    _showSuccess("Valuation completed successfully! ✓");
+  /// The portal's Reject Case. Records the reason in the case history.
+  Future<void> _onReject() async {
+    final controller = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Reject Case"),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 3,
+          decoration: const InputDecoration(border: OutlineInputBorder(), hintText: "Reason for rejection"),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              if (controller.text.trim().isEmpty) return;
+              Navigator.pop(ctx, controller.text.trim());
+            },
+            child: const Text("Reject"),
+          ),
+        ],
+      ),
+    );
+    if (reason == null || reason.isEmpty) return;
+    await api.addWorkflowHistory(
+      valuationId: _ctx()["id"]!,
+      action: "Final Report Rejected",
+      remarks: reason,
+      performedByUserId: currentUserId,
+      performedByUserName: currentUserName,
+      statusFrom: "FinalReport",
+    );
+    if (!mounted) return;
+    _showSuccess("Case rejected. Reason has been recorded.");
     Navigator.pop(context);
   }
 
@@ -590,11 +652,12 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
     if (result == null) return;
     final reason = result['reason'] ?? '';
     if (reason.trim().isEmpty) return;
-    await _attemptReturn(reason: reason.trim(), overrideAssigneeId: "");
+    await _attemptReturn(reason: reason.trim(), target: result['target'] ?? 'QualityControl', overrideAssigneeId: "");
   }
 
   Future<void> _attemptReturn({
     required String reason,
+    required String target,
     required String overrideAssigneeId,
   }) async {
     setState(() => _isReturning = true);
@@ -613,25 +676,26 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
       returnReason: reason,
       currentUserId: userId,
       currentUserName: userName,
-      targetReturnStep: "QualityControl",
+      targetReturnStep: target,
       overrideAssigneeId: overrideAssigneeId,
     );
+    final targetLabel = target == 'AVO' ? 'AVO' : 'QC';
 
     if (!mounted) return;
 
     if (res['success'] == true) {
       await api.addWorkflowHistory(
         valuationId: ctx["id"]!,
-        action: "FinalReport Returned to QC",
+        action: "FinalReport Returned to $targetLabel",
         remarks: reason,
         performedByUserId: currentUserId,
         performedByUserName: currentUserName,
         statusFrom: "FinalReport",
-        statusTo: "QC",
+        statusTo: targetLabel,
       );
       if (!mounted) return;
       setState(() => _isReturning = false);
-      _showSuccess("Case returned to Quality Control");
+      _showSuccess(target == 'AVO' ? "Case returned to the inspector" : "Case returned to Quality Control");
       Navigator.pop(context);
       return;
     }
@@ -643,10 +707,11 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
 
     if (needsOverride) {
       setState(() => _isReturning = false);
-      final picked =
-          await _showOverridePickerDialog('QualityControl', 'QC');
+      final picked = target == 'AVO'
+          ? await _showOverridePickerDialog('CanEditInspection', 'AVO')
+          : await _showOverridePickerDialog('QualityControl', 'QC');
       if (picked == null) return;
-      await _attemptReturn(reason: reason, overrideAssigneeId: picked);
+      await _attemptReturn(reason: reason, target: target, overrideAssigneeId: picked);
       return;
     }
 
@@ -655,14 +720,22 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
   }
 
   // ---------------------------------------------------------------------------
-  // PDF DOWNLOAD
+  // PDF: preview always, download only once approved (as the portal)
   // ---------------------------------------------------------------------------
-  Future<void> _downloadPdf() async {
+
+  /// The report, fetched once: Preview and Download share it rather than
+  /// generating it twice, as the portal does.
+  Uint8List? _pdfBytes;
+
+  /// Fetches the report from the report service the portal uses. Built on
+  /// demand, so it takes a while; null when it could not be had.
+  Future<Uint8List?> _fetchPdf() async {
+    if (_pdfBytes != null) return _pdfBytes;
     final ctx = _ctx();
     final valuationId = ctx["id"] ?? "";
     if (valuationId.isEmpty) {
       _showError("Valuation ID not available for PDF generation.");
-      return;
+      return null;
     }
     // _ctx() fills in placeholders when these are missing, and the report
     // service cannot find a case from those, so stop instead of asking for one.
@@ -670,53 +743,77 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
     final applicantContact = ctx["contact"]!;
     if (vehicleNumber == "UNKNOWN" || applicantContact == "0000000000") {
       _showError("Vehicle number or applicant contact missing for this case.");
-      return;
+      return null;
     }
 
-    // The report service the portal uses, so the app shows the same six-page
-    // report. The old prontomotopdf host this used to call no longer exists.
-    final url = Uri.parse("${ApiService.pdfBaseUrl}/api/Valuation/FinalReport/pdf")
-        .replace(queryParameters: {
+    final url = Uri.parse("${ApiService.pdfBaseUrl}/api/Valuation/FinalReport/pdf").replace(queryParameters: {
       "id": valuationId,
       "vehicleNumber": vehicleNumber,
       "applicantContact": applicantContact,
-    }).toString();
+    });
 
-    // Fetch it here rather than handing the link to a browser, which is what the
-    // portal does. The report is built on demand and takes a while, so in a
-    // browser tab it just looks like a blank page that never loads.
-    if (_downloadingPdf) return;
+    if (_downloadingPdf) return null;
     setState(() => _downloadingPdf = true);
     try {
-      final res = await http
-          .get(Uri.parse(url))
-          .timeout(const Duration(minutes: 3));
-
+      final res = await apiHttp.get(url).timeout(const Duration(minutes: 3));
       if (res.statusCode != 200) {
         _showError("Report service returned ${res.statusCode}. Try again.");
-        return;
+        return null;
       }
-      if (res.bodyBytes.length < 5 ||
-          String.fromCharCodes(res.bodyBytes.take(4)) != "%PDF") {
+      if (res.bodyBytes.length < 5 || String.fromCharCodes(res.bodyBytes.take(4)) != "%PDF") {
         _showError("The report came back empty. Try again.");
-        return;
+        return null;
       }
+      _pdfBytes = res.bodyBytes;
+      return _pdfBytes;
+    } on TimeoutException {
+      _showError("The report is taking too long to build. Try again.");
+      return null;
+    } catch (e) {
+      _showError("PDF error: $e");
+      return null;
+    } finally {
+      if (mounted) setState(() => _downloadingPdf = false);
+    }
+  }
 
+  /// Shows the report inside the app, with nothing to save it from until the
+  /// case is approved. Approving can be done from the preview, as on the portal.
+  Future<void> _onPreview() async {
+    final bytes = await _fetchPdf();
+    if (bytes == null || !mounted) return;
+    final action = await Navigator.push<ReportPreviewAction>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReportPreviewPage(
+          pdfBytes: bytes,
+          vehicleNumber: _ctx()["vNo"]!,
+          caseApproved: _caseApproved,
+          canApprove: _canDecide,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (action == ReportPreviewAction.approve) await _onApprove();
+    if (action == ReportPreviewAction.download) await _onDownload();
+  }
+
+  /// Saves the report and opens it, once the case is approved.
+  Future<void> _onDownload() async {
+    if (!_caseApproved) return;
+    final bytes = await _fetchPdf();
+    if (bytes == null || !mounted) return;
+    try {
       // Same file name as the portal's download.
-      final dir = await getTemporaryDirectory();
-      final file = File("${dir.path}/${vehicleNumber}_report.pdf");
-      await file.writeAsBytes(res.bodyBytes, flush: true);
-
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File("${dir.path}/${_ctx()["vNo"]}_report.pdf");
+      await file.writeAsBytes(bytes, flush: true);
       final opened = await OpenFilex.open(file.path, type: "application/pdf");
       if (opened.type != ResultType.done) {
         _showError("Report saved, but no PDF app could open it: ${opened.message}");
       }
-    } on TimeoutException {
-      _showError("The report is taking too long to build. Try again.");
     } catch (e) {
       _showError("PDF error: $e");
-    } finally {
-      if (mounted) setState(() => _downloadingPdf = false);
     }
   }
 
@@ -732,125 +829,53 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
   }
 
   // ---------------------------------------------------------------------------
-  // RETURN REPORT DIALOG
-  // ---------------------------------------------------------------------------
-  Future<void> _onReturnReportPressed() async {
-    final reasonController = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Return Final Report"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "This case will be returned to Quality Control.",
-              style: TextStyle(color: Colors.grey, fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-            const Text("Reason", style: TextStyle(color: Colors.grey, fontSize: 13)),
-            const SizedBox(height: 6),
-            TextField(
-              controller: reasonController,
-              autofocus: true,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText: "Enter reason for returning...",
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red, foregroundColor: Colors.white),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text("Confirm Return"),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-    final reason = reasonController.text.trim();
-
-    setState(() => _isReturningReport = true);
-    final ctx = _ctx();
-    final id = ctx["id"]!;
-    final vNo = ctx["vNo"]!;
-    final contact = ctx["contact"]!;
-    final stepOrder = widget.summaryData['workflowStepOrder'] != null
-        ? int.tryParse(widget.summaryData['workflowStepOrder'].toString()) ?? 5
-        : widget.summaryData['stepOrder'] != null
-            ? int.tryParse(widget.summaryData['stepOrder'].toString()) ?? 5
-            : 5;
-
-    final result = await api.rejectToPreviousStage(id, stepOrder, vNo, contact, reason: reason.isNotEmpty ? reason : "Rejected from Mobile App");
-    if (!mounted) return;
-    setState(() => _isReturningReport = false);
-
-    if (result['success'] == true) {
-      _showSuccess("Report returned to Quality Control.");
-      Navigator.pop(context);
-    } else {
-      _showError("Return failed: ${result['message']}");
-    }
-  }
-
-  // ---------------------------------------------------------------------------
   // DIALOGS
   // ---------------------------------------------------------------------------
   Future<Map<String, String>?> _showReturnReasonDialog() {
     final controller = TextEditingController();
+    String target = 'QualityControl';
     return showDialog<Map<String, String>>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Return to Quality Control"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "This case will be sent back to Quality Control for revision.",
-              style: TextStyle(color: Colors.grey, fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-            const Text("Reason for returning:",
-                style: TextStyle(color: Colors.grey, fontSize: 13)),
-            const SizedBox(height: 6),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText: "e.g. Valuation amount needs correction",
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text("Return with Recommendations"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DropdownButtonFormField<String>(
+                value: target,
+                decoration: const InputDecoration(labelText: "Send back to", border: OutlineInputBorder()),
+                items: const [
+                  DropdownMenuItem(value: 'QualityControl', child: Text("Quality Control")),
+                  DropdownMenuItem(value: 'AVO', child: Text("Inspector (AVO)")),
+                ],
+                onChanged: (v) => setDialogState(() => target = v ?? 'QualityControl'),
               ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  hintText: "Recommendations / reason for returning",
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white),
+              onPressed: () {
+                if (controller.text.trim().isEmpty) return;
+                Navigator.pop(ctx, {"reason": controller.text.trim(), "target": target});
+              },
+              child: const Text("Return"),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text("Cancel")),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                foregroundColor: Colors.white),
-            onPressed: () {
-              if (controller.text.trim().isEmpty) return;
-              Navigator.pop(ctx,
-                  {"reason": controller.text.trim(), "target": "QualityControl"});
-            },
-            child: const Text("Return"),
-          ),
-        ],
       ),
     );
   }
@@ -913,18 +938,6 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
         ],
       ),
     );
-  }
-
-  Future<void> _selectDate(TextEditingController c) async {
-    final initial = DateTime.tryParse(c.text) ?? DateTime.now();
-    final picked = await showDatePicker(
-        context: context,
-        initialDate: initial,
-        firstDate: DateTime(1990),
-        lastDate: DateTime(2040));
-    if (picked != null) {
-      setState(() => c.text = DateFormat('yyyy-MM-dd').format(picked));
-    }
   }
 
   void _showError(String msg) {
@@ -1028,20 +1041,11 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
     return "";
   }
 
+  /// Day-first, as the portal shows every date. These are read-only displays.
   String _fmtDate(String s) {
     if (s.isEmpty || s == "null") return "";
-    try {
-      return DateFormat('yyyy-MM-dd').format(DateTime.parse(s));
-    } catch (_) {
-      return s.split("T").first;
-    }
-  }
-
-  String _displayBool(String s) {
-    final l = s.toLowerCase();
-    if (l == "true" || l == "yes" || l == "1") return "Yes";
-    if (l == "false" || l == "no" || l == "0") return "No";
-    return s.isEmpty ? "-" : s;
+    final shown = formatDdMmYyyy(s);
+    return shown.isEmpty ? s.split("T").first : shown;
   }
 
   // ===========================================================================
@@ -1063,17 +1067,6 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
             tooltip: "Case History",
             onPressed: () => showCaseHistory(context, _ctx()["id"]!),
           ),
-          IconButton(
-            icon: _downloadingPdf
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        color: Colors.teal, strokeWidth: 2))
-                : const Icon(Icons.picture_as_pdf, color: Colors.teal),
-            tooltip: "Download PDF",
-            onPressed: _downloadingPdf ? null : _downloadPdf,
-          ),
         ],
       ),
       body: _isLoading
@@ -1084,51 +1077,36 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
                 key: _formKey,
                 child: Column(
                   children: [
-                    // Download PDF button at the top
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: _downloadingPdf ? null : _downloadPdf,
-                        icon: _downloadingPdf
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                    color: Colors.white, strokeWidth: 2))
-                            : const Icon(Icons.picture_as_pdf, size: 18),
-                        label: Text(
-                            _downloadingPdf
-                                ? "Preparing report…"
-                                : "Download PDF",
-                            style:
-                                const TextStyle(fontWeight: FontWeight.bold)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.indigo.shade600,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
                     _buildHeaderCard(),
+                    const SizedBox(height: 12),
+                    CaseInfoBar(
+                      valuationId: _ctx()["id"]!,
+                      vehicleNumber: _ctx()["vNo"]!,
+                      applicantContact: _ctx()["contact"]!,
+                    ),
                     if (_returnedBy != null) ...[
                       const SizedBox(height: 12),
                       _buildReturnBanner(),
                     ],
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 16),
+                    ReportPaperView(
+                      report: _finalReport,
+                      valuationId: _ctx()["id"]!,
+                      referenceNumber: _reference,
+                      valuationAmount: num.tryParse(_readStr(_finalReport, ['qualityControl.valuationAmount'])),
+                      rating: _ratingDisplay,
+                      lowRange: _lowRange,
+                      midRange: _midRange,
+                      highRange: _highRange,
+                      rangeLoading: _rangeLoading,
+                      checklist: _cl,
+                      checklistRemarks: _clRemarks,
+                      brakesScore: _brakesScore,
+                      selectedPhotoKeys: _selectedPhotoKeys,
+                      onPhotoTap: _showFullScreenImage,
+                    ),
                     _buildActions(),
-                    const SizedBox(height: 20),
-                    _buildStakeholderSection(),
-                    _buildVehicleDetailsSection(),
-                    _buildInspectionDetailsSection(),
-                    _buildQcSection(),
-                    _buildPaymentSection(),
-                    _buildValuationRangesSection(),
-                    _buildAiResponseSection(),
-                    _buildPhotosSection(),
                     _buildNotesSection(),
-                    const SizedBox(height: 20),
-                    _buildActions(),
                     const SizedBox(height: 50),
                   ],
                 ),
@@ -1281,140 +1259,115 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
   // ---------------------------------------------------------------------------
   Widget _buildActions() {
     final busy = _isCompleting || _isReturning;
+    Widget spinner() => const SizedBox(
+        height: 18, width: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2));
 
-    if (!_isEditing) {
-      return Column(children: [
+    return Column(children: [
+      // Approver decision, for final report staff and every admin, until approved.
+      if (_canDecide && !_caseApproved) ...[
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: busy ? null : _onApprove,
+            icon: _isCompleting ? spinner() : const Icon(Icons.check_circle, size: 18),
+            label: const Text("APPROVE CASE", style: TextStyle(fontWeight: FontWeight.bold)),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF10B981),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12)),
+          ),
+        ),
+        const SizedBox(height: 8),
         Row(children: [
           Expanded(
-            child: ElevatedButton.icon(
-              onPressed: () => setState(() => _isEditing = true),
-              icon: const Icon(Icons.edit, size: 16),
-              label: const Text("Review & Complete"),
+            child: ElevatedButton(
+              onPressed: busy ? null : _onReturnPressed,
               style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.teal,
+                  backgroundColor: Colors.orange,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 12)),
+              child: _isReturning ? spinner() : const Text("RETURN"),
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           Expanded(
-            child: ElevatedButton.icon(
-              onPressed: _downloadingPdf ? null : _downloadPdf,
-              icon: _downloadingPdf
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                          color: Colors.white, strokeWidth: 2))
-                  : const Icon(Icons.picture_as_pdf, size: 16),
-              label: Text(_downloadingPdf ? "Preparing…" : "PDF"),
+            child: ElevatedButton(
+              onPressed: busy ? null : _onReject,
               style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.indigo.shade600,
+                  backgroundColor: Colors.red,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 12)),
+              child: const Text("REJECT"),
             ),
           ),
         ]),
         const SizedBox(height: 8),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: () => Navigator.pop(context),
-            icon: const Icon(Icons.arrow_back, size: 16),
-            label: const Text("Back"),
-            style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                side: const BorderSide(color: Colors.grey)),
-          ),
+      ],
+      // The QC review with the AI's own values beside the QC officer's.
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: busy
+              ? null
+              : () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => QcReviewPage(
+                        report: _finalReport,
+                        valuationId: _ctx()["id"]!,
+                        vehicleNumber: _ctx()["vNo"]!,
+                        applicantContact: _ctx()["contact"]!,
+                        valuationType: widget.summaryData['valuationType']?.toString(),
+                        referenceNumber: _reference,
+                        lowRange: _lowRange,
+                        midRange: _midRange,
+                        highRange: _highRange,
+                      ),
+                    ),
+                  ),
+          icon: const Icon(Icons.fact_check_outlined, size: 16),
+          label: const Text("Preview QC (AI vs QC officer)"),
+          style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
         ),
-      ]);
-    }
-
-    return Column(children: [
-      // Complete + Return row
+      ),
+      const SizedBox(height: 8),
       Row(children: [
         Expanded(
-          child: ElevatedButton(
-            onPressed: busy ? null : _onComplete,
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.teal,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12)),
-            child: _isCompleting
-                ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2))
-                : const Text("COMPLETE",
-                    style: TextStyle(fontWeight: FontWeight.bold)),
+          child: OutlinedButton.icon(
+            onPressed: busy || _downloadingPdf ? null : _onPreview,
+            icon: const Icon(Icons.visibility, size: 16),
+            label: Text(_downloadingPdf ? "Preparing…" : "Preview PDF"),
+            style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
           ),
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: ElevatedButton(
-            onPressed: busy || _downloadingPdf ? null : _downloadPdf,
+          child: ElevatedButton.icon(
+            onPressed: busy || _downloadingPdf || !_caseApproved ? null : _onDownload,
+            icon: Icon(_caseApproved ? Icons.download : Icons.lock, size: 16),
+            label: const Text("Download PDF"),
             style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.indigo.shade600,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 12)),
-            child: _downloadingPdf
-                ? const SizedBox(
-                    height: 18,
-                    width: 18,
-                    child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2))
-                : const Text("DOWNLOAD PDF"),
           ),
         ),
       ]),
-      const SizedBox(height: 8),
-      Row(children: [
-        Expanded(
-          child: ElevatedButton(
-            onPressed: busy ? null : _onReturnPressed,
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12)),
-            child: _isReturning
-                ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2))
-                : const Text("RETURN TO QC"),
-          ),
+      if (!_caseApproved)
+        const Padding(
+          padding: EdgeInsets.only(top: 6),
+          child: Text("Preview the report and approve the case to unlock the download.",
+              style: TextStyle(fontSize: 12, color: Colors.grey)),
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: ElevatedButton(
-            onPressed: busy ? null : () => setState(() => _isEditing = false),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12)),
-            child: const Text("CANCEL"),
-          ),
-        ),
-      ]),
       const SizedBox(height: 8),
       SizedBox(
         width: double.infinity,
-        child: ElevatedButton(
-          onPressed: (busy || _isReturningReport) ? null : _onReturnReportPressed,
-          style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red.shade700,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 12)),
-          child: _isReturningReport
-              ? const SizedBox(
-                  height: 20,
-                  width: 20,
-                  child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2))
-              : const Text("RETURN REPORT",
-                  style: TextStyle(fontWeight: FontWeight.bold)),
+        child: OutlinedButton.icon(
+          onPressed: () => Navigator.pop(context),
+          icon: const Icon(Icons.arrow_back, size: 16),
+          label: const Text("Back"),
+          style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 12), side: const BorderSide(color: Colors.grey)),
         ),
       ),
     ]);
@@ -1423,284 +1376,6 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
   // ---------------------------------------------------------------------------
   // REPORT SECTIONS (read-only previews — same as QC)
   // ---------------------------------------------------------------------------
-
-  Widget _buildStakeholderSection() {
-    return _buildSectionContainer("Stakeholder", [
-      _buildRO("Stakeholder Name",
-          _readStr(_finalReport, ['stakeholder.name', 'stakeholderName'])),
-      _buildRO("Executive Name",
-          _readStr(_finalReport, ['stakeholder.executiveName'])),
-      _buildRO("Contact Number",
-          _readStr(_finalReport, ['stakeholder.executiveContact'])),
-      _buildRO("WhatsApp",
-          _readStr(_finalReport, ['stakeholder.executiveWhatsapp'])),
-      _buildRO("Email",
-          _readStr(_finalReport, ['stakeholder.executiveEmail'])),
-      _buildRO("Applicant Name",
-          _readStr(_finalReport, ['stakeholder.applicant.name'])),
-      _buildRO("Applicant Contact",
-          _readStr(_finalReport, [
-            'stakeholder.applicant.contact',
-            'applicantContact'
-          ])),
-    ]);
-  }
-
-  Widget _buildVehicleDetailsSection() {
-    return _buildSectionContainer("Vehicle Details", [
-      _buildRO("Registration Number",
-          _readStr(_finalReport, ['vehicleDetails.registrationNumber'])),
-      _buildRO("Make",
-          _readStr(_finalReport, ['vehicleDetails.make'])),
-      _buildRO("Model",
-          _readStr(_finalReport, ['vehicleDetails.model'])),
-      _buildRO("Year of Mfg",
-          _readStr(_finalReport, ['vehicleDetails.yearOfMfg'])),
-      _buildRO("Body Type",
-          _readStr(_finalReport, ['vehicleDetails.bodyType'])),
-      _buildRO("Chassis Number",
-          _readStr(_finalReport, ['vehicleDetails.chassisNumber'])),
-      _buildRO("Engine Number",
-          _readStr(_finalReport, ['vehicleDetails.engineNumber'])),
-      _buildRO("Color",
-          _readStr(_finalReport, [
-            'vehicleDetails.colour',
-            'vehicleDetails.color'
-          ])),
-      _buildRO("Fuel Type",
-          _readStr(_finalReport, ['vehicleDetails.fuel'])),
-      _buildRO("Owner Name",
-          _readStr(_finalReport, ['vehicleDetails.ownerName'])),
-      _buildRO("RTO",
-          _readStr(_finalReport, ['vehicleDetails.rto'])),
-      _buildRO("Remarks",
-          _readStr(_finalReport, ['vehicleDetails.remarks'])),
-    ]);
-  }
-
-  Widget _buildInspectionDetailsSection() {
-    return _buildSectionContainer("Inspection Details", [
-      _buildRO("Inspected By",
-          _readStr(_finalReport, ['inspectionDetails.vehicleInspectedBy'])),
-      _buildRO("Date of Inspection",
-          _fmtDate(_readStr(
-              _finalReport, ['inspectionDetails.dateOfInspection']))),
-      _buildRO("Location",
-          _readStr(_finalReport, ['inspectionDetails.inspectionLocation'])),
-      _buildRO("Odometer",
-          _readStr(_finalReport, ['inspectionDetails.odometer'])),
-      _buildRO(
-          "Engine Started",
-          _displayBool(
-              _readStr(_finalReport, ['inspectionDetails.engineStarted']))),
-      _buildRO(
-          "Road Worthy",
-          _displayBool(
-              _readStr(_finalReport, ['inspectionDetails.roadWorthyCondition']))),
-      _buildRO(
-          "Tyre Condition",
-          _displayBool(
-              _readStr(_finalReport, ['inspectionDetails.overallTyreCondition']))),
-      _buildRO(
-          "Engine Condition",
-          _displayBool(
-              _readStr(_finalReport, ['inspectionDetails.engineCondition']))),
-      _buildRO(
-          "Brake Condition",
-          _displayBool(
-              _readStr(_finalReport, ['inspectionDetails.brakeSystem']))),
-      _buildRO("Remarks",
-          _readStr(_finalReport, ['inspectionDetails.remarks'])),
-    ]);
-  }
-
-  Widget _buildQcSection() {
-    return _buildSectionContainer("Quality Control Review", [
-      _buildRO("Overall Condition",
-          _readStr(_finalReport, ['qualityControl.overallCondition', 'qualityControl.overallRating'])),
-      _buildRO("Valuation Amount (₹)",
-          _readStr(_finalReport, ['qualityControl.valuationAmount'])),
-      _buildRO("Chassis Punch",
-          _readStr(_finalReport, ['qualityControl.chassisPunch'])),
-      _buildRO("Final Recommendation",
-          _readStr(_finalReport, ['qualityControl.finalRecommendation'])),
-      _buildRO("QC Remarks",
-          _readStr(_finalReport, ['qualityControl.remarks'])),
-      _buildRO("QC Reviewer",
-          _readStr(_finalReport, ['qualityControl.assignedTo'])),
-    ]);
-  }
-
-  Widget _buildPaymentSection() {
-    // The payment section is EDITABLE — it's part of the Complete payload.
-    return _buildSectionContainer("Payment Collection", [
-      if (_isEditing) ...[
-        _buildDropdown("Payment Status *", _paymentStatuses,
-            _selectedPaymentStatus, (v) {
-          if (v != null) setState(() => _selectedPaymentStatus = v);
-        }),
-        _buildField(
-          "Payment Reference",
-          _paymentReferenceController,
-          isRequired: false,
-        ),
-        _buildDateField(
-            "Payment Date *", _paymentDateController, true,
-            required: true),
-        _buildDropdown("Payment Method *", _paymentMethods,
-            _selectedPaymentMethod, (v) {
-          if (v != null) setState(() => _selectedPaymentMethod = v);
-        }),
-        _buildField(
-          "Payment Amount (₹) *",
-          _paymentAmountController,
-          isRequired: true,
-          keyboardType: TextInputType.number,
-        ),
-        _buildField(
-          "Remarks",
-          _remarksController,
-          isRequired: false,
-          maxLines: 3,
-        ),
-      ] else ...[
-        _buildRO("Payment Status", _selectedPaymentStatus),
-        _buildRO("Payment Reference", _paymentReferenceController.text),
-        _buildRO("Payment Date", _paymentDateController.text),
-        _buildRO("Payment Method", _selectedPaymentMethod),
-        _buildRO("Payment Amount (₹)", _paymentAmountController.text),
-        _buildRO("Remarks", _remarksController.text),
-      ],
-    ], isOpen: true);
-  }
-
-  Widget _buildValuationRangesSection() {
-    return _buildSectionContainer("Valuation Ranges (AI Estimate)", [
-      _buildRO("Low Range (₹ Lacs)",
-          _readStr(_finalReport, ['valuationResponse.lowRange'])),
-      _buildRO("Mid Range (₹ Lacs)",
-          _readStr(_finalReport, ['valuationResponse.midRange'])),
-      _buildRO("High Range (₹ Lacs)",
-          _readStr(_finalReport, ['valuationResponse.highRange'])),
-    ]);
-  }
-
-  Widget _buildAiResponseSection() {
-    final raw =
-        _readStr(_finalReport, ['valuationResponse.rawResponse']);
-    return _buildSectionContainer("AI Analysis", [
-      Padding(
-        padding: const EdgeInsets.all(16),
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-              color: Colors.grey.shade100,
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: Colors.grey.shade300)),
-          child: Text(
-            raw.isEmpty ? "No AI analysis available." : raw,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-          ),
-        ),
-      ),
-    ]);
-  }
-
-  Widget _buildPhotosSection() {
-    final photos = _finalReport['photoUrls'];
-    final List<MapEntry<String, dynamic>> entries = [];
-    if (photos is Map) {
-      photos.forEach((k, v) {
-        if (v != null &&
-            v.toString().isNotEmpty &&
-            v.toString().toLowerCase().startsWith('http')) {
-          entries.add(MapEntry(k.toString(), v));
-        }
-      });
-    }
-
-    return _buildSectionContainer("Photos", [
-      Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (entries.isEmpty)
-              const Text("No photos available.",
-                  style: TextStyle(
-                      color: Colors.grey, fontStyle: FontStyle.italic))
-            else
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate:
-                    const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  crossAxisSpacing: 8,
-                  mainAxisSpacing: 8,
-                  childAspectRatio: 1.0,
-                ),
-                itemCount: entries.length,
-                itemBuilder: (_, i) {
-                  final e = entries[i];
-                  return Card(
-                    elevation: 1,
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () => _showFullScreenImage(e.value.toString(), e.key),
-                            child: ClipRRect(
-                              borderRadius: const BorderRadius.vertical(
-                                  top: Radius.circular(4)),
-                              child: Image.network(
-                                e.value.toString(),
-                                fit: BoxFit.cover,
-                                width: double.infinity,
-                                errorBuilder: (_, __, ___) => Container(
-                                  color: Colors.grey.shade200,
-                                  child: const Center(
-                                      child: Icon(Icons.broken_image,
-                                          color: Colors.grey, size: 40)),
-                                ),
-                                loadingBuilder: (ctx, child, prog) =>
-                                    prog == null
-                                        ? child
-                                        : Container(
-                                            color: Colors.grey.shade100,
-                                            child: const Center(
-                                                child: SizedBox(
-                                                    height: 24,
-                                                    width: 24,
-                                                    child:
-                                                        CircularProgressIndicator(
-                                                            strokeWidth: 2))),
-                                          ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.all(6),
-                          child: Text(
-                            e.key,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                                fontSize: 10, fontWeight: FontWeight.w500),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-          ],
-        ),
-      ),
-    ]);
-  }
 
   Widget _buildNotesSection() {
     return Container(
@@ -1773,131 +1448,4 @@ class _FinalReportDetailPageState extends State<FinalReportDetailPage> {
   // GENERIC WIDGET HELPERS
   // ---------------------------------------------------------------------------
 
-  Widget _buildSectionContainer(String title, List<Widget> children,
-      {bool isOpen = false}) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.grey.shade300)),
-      child: ExpansionTile(
-        initiallyExpanded: isOpen,
-        title: Text(title,
-            style: const TextStyle(fontWeight: FontWeight.bold)),
-        children: children,
-      ),
-    );
-  }
-
-  Widget _buildRO(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Expanded(
-            flex: 2,
-            child: Text(label,
-                style:
-                    TextStyle(color: Colors.grey[600], fontSize: 14))),
-        Expanded(
-            flex: 3,
-            child: Text(value.isEmpty ? "-" : value,
-                style: const TextStyle(fontWeight: FontWeight.w500))),
-      ]),
-    );
-  }
-
-  Widget _buildField(
-    String label,
-    TextEditingController controller, {
-    bool isRequired = false,
-    TextInputType? keyboardType,
-    int maxLines = 1,
-  }) {
-    final labelWidget = RichText(
-      text: TextSpan(
-          text: label,
-          style: TextStyle(color: Colors.grey[600], fontSize: 14),
-          children: [
-            if (isRequired)
-              const TextSpan(
-                  text: " *", style: TextStyle(color: Colors.red))
-          ]),
-    );
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          labelWidget,
-          const SizedBox(height: 6),
-          TextFormField(
-            controller: controller,
-            keyboardType: keyboardType,
-            maxLines: maxLines,
-            inputFormatters: keyboardType == TextInputType.number
-                ? [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))]
-                : null,
-            validator: isRequired
-                ? (v) => (v == null || v.trim().isEmpty) ? "Required" : null
-                : null,
-            decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                isDense: true,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDropdown(
-    String label,
-    List<String> items,
-    String value,
-    Function(String?) onChanged,
-  ) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: TextStyle(color: Colors.grey[600], fontSize: 14)),
-          const SizedBox(height: 6),
-          DropdownButtonFormField<String>(
-            value: value,
-            isExpanded: true,
-            decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
-            items: items
-                .map((it) => DropdownMenuItem(
-                    value: it,
-                    child: Text(it,
-                        style: const TextStyle(fontSize: 13))))
-                .toList(),
-            onChanged: onChanged,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDateField(
-    String label,
-    TextEditingController controller,
-    bool isEditable, {
-    bool required = false,
-  }) {
-    return GestureDetector(
-      onTap: isEditable ? () => _selectDate(controller) : null,
-      child: AbsorbPointer(
-        child: _buildField(label, controller, isRequired: required),
-      ),
-    );
-  }
 }

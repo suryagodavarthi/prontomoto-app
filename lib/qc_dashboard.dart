@@ -3,13 +3,19 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'services/api_service.dart';
+import 'services/brand.dart';
 import 'main.dart';
 import 'avo_dashboard.dart';
 import 'finalreport_dashboard.dart';
 import 'dashboard_common.dart';
 import 'case_history_page.dart';
+import 'case_search_page.dart';
 import 'qc_photo_review.dart';
 import 'qc_checklist.dart';
+import 'inspection_score.dart';
+import 'case_info_bar.dart';
+import 'report_paper_view.dart';
+import 'date_format.dart';
 
 // =============================================================================
 // QC DASHBOARD — list of cases currently in QualityControl step
@@ -120,12 +126,14 @@ class _QcDashboardState extends State<QcDashboard> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("Vehga QC",
-                style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
+            Text("${Brand.profile.name} QC",
+                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
             Text("Hello, ${widget.userName}", style: const TextStyle(color: Colors.grey, fontSize: 12)),
           ],
         ),
         actions: [
+          IconButton(icon: const Icon(Icons.search, color: Colors.black), tooltip: "Search cases",
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CaseSearchPage()))),
           IconButton(icon: const Icon(Icons.refresh, color: Colors.black), onPressed: _load),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.red),
@@ -275,7 +283,6 @@ class QcDetailPage extends StatefulWidget {
 
 class _QcDetailPageState extends State<QcDetailPage> {
   final ApiService api = ApiService();
-  final _qcFormKey = GlobalKey<FormState>();
 
   bool _isLoading = true;
   bool _isEditing = false;
@@ -287,41 +294,50 @@ class _QcDetailPageState extends State<QcDetailPage> {
   Map<String, dynamic> _qcData = {};
   Map<String, dynamic> _finalReport = {};
   Map<String, dynamic> _workflowTable = {};
-  Map<String, dynamic> _paymentData = {};
   List<dynamic> _notes = [];
 
   String? _returnedBy;
   String? _returnMessage;
 
-  // QC form — button-picker state (matches web portal selectors)
-  static const _chassisPunchOptions = ['Original', 'Re-Punched', 'Tampered'];
-  static const _overallConditionOptions = ['Good', 'Average', 'Poor'];
-  static const _finalRecommendationOptions = [
-    'Recommended',
-    'Recommended with Conditions',
-    'Not Recommended',
-  ];
-
-  String? _selectedChassisPunch;
-  String? _selectedOverallCondition;
-  String? _selectedFinalRecommendation;
-
-  // QC form controllers (text fields that remain)
+  // ── The QC form, as the portal's quality-control-update ──────────────────
+  /// The derived overall score ("8.5"), locked when the AVO's sections give one.
+  final _overallRatingController = TextEditingController();
   final _valuationAmountController = TextEditingController();
   final _qcRemarksController = TextEditingController();
 
-  // QC verification checklist (qcChecklist / qcChecklistRemarks on the QC doc)
-  final Map<String, String?> _cl = {};
-  final Map<String, String> _clRemarks = {};
+  /// As stored on the QC record: Original / Re-Punched / Tampered.
+  String? _chassisPunch;
 
-  // Payment controllers
-  final List<String> _paymentStatuses = ["Pending", "Completed", "Failed"];
-  final List<String> _paymentMethods = ["Online", "Cash", "Card", "UPI"];
-  String? _selectedPaymentStatus;
-  String? _selectedPaymentMethod;
-  final _paymentReferenceController = TextEditingController();
-  final _paymentDateController = TextEditingController();
-  final _paymentAmountController = TextEditingController(text: '800');
+  // Section scores carried over from the AVO inspection.
+  List<SectionScore> _sectionScores = [];
+  double? _overallScore;
+
+  // Checklist: verdicts, the note behind each, and the four remarks boxes.
+  Map<String, String?> _cl = {};
+  Map<String, String> _clWhy = {};
+  final Map<String, String> _clRemarks = {'doc': '', 'acc': '', 'val': '', 'rec': ''};
+  Map? _qcChecklistSaved;
+
+  /// Keys a person decided. Saved with the checklist, so the photo reader never
+  /// overwrites a reviewer's verdict, however late it lands.
+  final Set<String> _savedByReviewer = {};
+
+  // The photo reader.
+  bool _aiRunning = false;
+  String? _aiError;
+  final Set<String> _aiVerified = {};
+  Map<String, dynamic>? _aiReadings;
+  Map<String, String> _aiStatus = {};
+
+  /// Submit waits for a successful Save, as on the portal.
+  bool _saved = false;
+
+  // The report view: the case's Unique ID and market range.
+  String? _reference;
+  num? _lowRange;
+  num? _midRange;
+  num? _highRange;
+  bool _rangeLoading = false;
 
   // Note adder
   final _noteController = TextEditingController();
@@ -329,6 +345,10 @@ class _QcDetailPageState extends State<QcDetailPage> {
   @override
   void initState() {
     super.initState();
+    // The report view's valuation follows what QC types.
+    _valuationAmountController.addListener(() {
+      if (mounted) setState(() {});
+    });
     _loadAllData();
   }
 
@@ -341,7 +361,6 @@ class _QcDetailPageState extends State<QcDetailPage> {
       final report = await api.getFinalReport(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
       final table = await api.getWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
       final notes = await api.getNotes(ctx["id"]!);
-      final payment = await api.getPayment(ctx["id"]!);
 
       if (!mounted) return;
       setState(() {
@@ -349,15 +368,27 @@ class _QcDetailPageState extends State<QcDetailPage> {
         _finalReport = report;
         _workflowTable = table;
         _notes = notes;
-        _paymentData = payment;
+
+        // Overall score is the mean of the AVO's section scores — the figure the
+        // AVO page shows and the report's cover gauge prints.
+        final scored = scoreInspection(
+          _readStr(report, ['stakeholder.vehicleSegment']),
+          report['inspectionDetails'] is Map ? Map<String, dynamic>.from(report['inspectionDetails']) : null,
+          fallbackType: widget.summaryData['valuationType']?.toString(),
+        );
+        _sectionScores = scored.sections;
+        _overallScore = scored.overall;
 
         _populateQcFields(qc);
-        _populatePaymentFields(payment);
-        _populateChecklist(qc, report);
+        _populateChecklist(qc);
         _checkReturnStatus(table);
 
         _isLoading = false;
       });
+      // Reads the photos without being asked, as the portal does. The backend
+      // keeps the answer against this photo set, so only the first read costs.
+      _runAiPhotoAudit();
+      _loadReportExtras();
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -366,6 +397,67 @@ class _QcDetailPageState extends State<QcDetailPage> {
         );
       }
     }
+  }
+
+  /// The Unique ID for the report header, and the market range for its valuation
+  /// box. The range is read off the case; when there is none, it is asked for, as
+  /// the portal's report page does.
+  Future<void> _loadReportExtras() async {
+    final ctx = _ctx();
+    num? n(String path) => num.tryParse(_readStr(_finalReport, [path]));
+    setState(() {
+      _lowRange = n('valuationResponse.lowRange');
+      _midRange = n('valuationResponse.midRange');
+      _highRange = n('valuationResponse.highRange');
+    });
+    final reference = await api.getReferenceNumber(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
+    if (!mounted) return;
+    setState(() => _reference = reference);
+
+    if ((_lowRange ?? 0) > 0 && (_highRange ?? 0) > 0) return;
+    setState(() => _rangeLoading = true);
+    final range = await api.getMarketRange(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
+    if (!mounted) return;
+    setState(() {
+      _rangeLoading = false;
+      if (range != null) {
+        _lowRange = range['lowRange'];
+        _midRange = range['midRange'];
+        _highRange = range['highRange'];
+      }
+    });
+  }
+
+  Widget _buildReportView() {
+    final ctx = _ctx();
+    return ReportPaperView(
+      report: _finalReport,
+      valuationId: ctx["id"]!,
+      referenceNumber: _reference,
+      valuationAmount: num.tryParse(_valuationAmountController.text.trim()),
+      rating: _overallRatingController.text.trim().isEmpty ? null : _overallRatingController.text.trim(),
+      lowRange: _lowRange,
+      midRange: _midRange,
+      highRange: _highRange,
+      rangeLoading: _rangeLoading,
+      chassisPunch: _chassisPunch,
+      onPhotoTap: _showFullScreenImage,
+      // Gallery selection and annotation, the portal's QC photo review flow.
+      photoAction: OutlinedButton.icon(
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => QcPhotoReviewPage(
+              valuationId: ctx["id"]!,
+              vehicleNumber: ctx["vNo"]!,
+              applicantContact: ctx["contact"]!,
+            ),
+          ),
+        ),
+        icon: const Icon(Icons.photo_library_outlined),
+        label: const Text("Report Photos — Select for Report"),
+      ),
+    );
   }
 
   Map<String, String> _ctx() {
@@ -379,58 +471,134 @@ class _QcDetailPageState extends State<QcDetailPage> {
   }
 
   void _populateQcFields(Map<String, dynamic> data) {
-    // overallCondition takes precedence; fall back to overallRating (web portal parity)
-    final cond = _readStr(data, ['overallCondition', 'overallRating']);
-    _selectedOverallCondition =
-        _overallConditionOptions.contains(cond) ? cond : null;
-
-    final chassis = _readStr(data, ['chassisPunch']);
-    _selectedChassisPunch =
-        _chassisPunchOptions.contains(chassis) ? chassis : null;
-
-    final rec = _readStr(data, ['finalRecommendation']);
-    _selectedFinalRecommendation =
-        _finalRecommendationOptions.contains(rec) ? rec : null;
-
+    _overallRatingController.text = _readStr(data, ['overallRating']);
     _valuationAmountController.text = _readStr(data, ['valuationAmount']);
     _qcRemarksController.text = _readStr(data, ['remarks']);
+    final punch = _readStr(data, ['chassisPunch']);
+    _chassisPunch = punch.isEmpty ? null : punch;
+    // Overall Rating is the derived score, written over whatever was saved and
+    // locked so the checklist and the printed report can never disagree.
+    if (_overallScore != null) _overallRatingController.text = _overallScore!.toStringAsFixed(1);
   }
 
-  /// Prefills the checklist from report data, then overlays previously saved
-  /// values — same order as the portal's loadQualityControl().
-  void _populateChecklist(Map<String, dynamic> qc, Map<String, dynamic> report) {
-    _cl.clear();
-    _clRemarks.clear();
-    prefillQcChecklist(
-      _cl,
-      report: report,
-      overallRating: _selectedOverallCondition ?? '',
-      chassisPunchRaw: _selectedChassisPunch ?? '',
-      valuationAmount: num.tryParse(_valuationAmountController.text) ?? 0,
+  /// Photos actually on file, by key.
+  List<String> get _photoKeys {
+    final photos = _finalReport['photoUrls'] ?? _finalReport['PhotoUrls'];
+    if (photos is! Map) return [];
+    return [
+      for (final e in photos.entries)
+        if (e.value != null && e.value.toString().trim().isNotEmpty) e.key.toString(),
+    ];
+  }
+
+  List<String> _stringList(Object? v) => v is List ? [for (final x in v) x.toString()] : <String>[];
+
+  Map<String, String> _stringMap(Object? v) => v is Map
+      ? {for (final e in v.entries) if (e.value != null) e.key.toString(): e.value.toString()}
+      : <String, String>{};
+
+  /// Every card's verdict and note, from the shared engine (qc_checklist.dart).
+  void _prefillChecklist() {
+    final readings = _aiReadings;
+    final result = buildQcChecklist(
+      report: _finalReport,
+      overallRating: _overallRatingController.text,
+      chassisPunch: _chassisPunch,
+      photoKeys: _photoKeys,
+      vehicleSegment: _readStr(_finalReport, ['stakeholder.vehicleSegment']),
+      valuationType: widget.summaryData['valuationType']?.toString(),
+      aiFindings: readings == null
+          ? null
+          : QcAiFindings(
+              damage: _stringList(readings['damageFound']),
+              missingParts: _stringList(readings['missingParts']),
+              photosRead: true,
+            ),
     );
+    _cl = result.cl;
+    _clWhy = result.why;
+  }
+
+  /// The automatic verdicts, then the reviewer's saved ones over them, as the
+  /// portal's loadQualityControl() does.
+  void _populateChecklist(Map<String, dynamic> qc) {
     final saved = qc['qcchecklist'];
-    if (saved is Map) {
-      saved.forEach((k, v) {
-        if (v != null && v.toString() != 'null') _cl[k.toString()] = v.toString();
-      });
-    }
+    _qcChecklistSaved = saved is Map ? saved : null;
+    final reviewerKeys = _stringList(qc['qcchecklistreviewerkeys']);
+    _prefillChecklist();
+    applySavedChecklist(QcChecklistResult(_cl, _clWhy), _qcChecklistSaved, reviewerKeys);
     final savedRemarks = qc['qcchecklistremarks'];
     if (savedRemarks is Map) {
       savedRemarks.forEach((k, v) {
         if (v != null && v.toString().isNotEmpty) _clRemarks[k.toString()] = v.toString();
       });
     }
+    _savedByReviewer.addAll(reviewerKeys);
   }
 
-  void _populatePaymentFields(Map<String, dynamic> data) {
-    final pStatus = _readStr(data, ['paymentStatus']);
-    _selectedPaymentStatus = _paymentStatuses.contains(pStatus) ? pStatus : 'Pending';
-    final pMethod = _readStr(data, ['paymentMethod']);
-    _selectedPaymentMethod = _paymentMethods.contains(pMethod) ? pMethod : 'Online';
-    _paymentReferenceController.text = _readStr(data, ['paymentReference']);
-    _paymentDateController.text = _fmtDate(_readStr(data, ['paymentDate']));
-    final amt = _readStr(data, ['paymentAmount']);
-    _paymentAmountController.text = amt.isNotEmpty ? amt : '800';
+  /// Reads the case photos and folds the findings into the checklist. A key the
+  /// reader could not verify keeps its rule-based verdict, and a reviewer's own
+  /// choice is never overwritten: a human verdict outranks a machine one.
+  Future<void> _runAiPhotoAudit({bool force = false}) async {
+    if (_aiRunning) return;
+    setState(() {
+      _aiRunning = true;
+      _aiError = null;
+    });
+    final ctx = _ctx();
+    final audit = await api.runAiPhotoAudit(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, force: force);
+    if (!mounted) return;
+    setState(() {
+      _aiRunning = false;
+      final readings = audit['readings'];
+      _aiReadings = readings is Map ? Map<String, dynamic>.from(readings) : null;
+      _aiStatus = _stringMap(audit['status']);
+
+      // Damage and missing parts are derived here from the findings; anything
+      // the reviewer decided is put back on top.
+      _prefillChecklist();
+      applySavedChecklist(QcChecklistResult(_cl, _clWhy), _qcChecklistSaved, _savedByReviewer);
+
+      if (audit['error'] != null) {
+        _aiError = audit['error'].toString();
+        return;
+      }
+      _stringMap(audit['why']).forEach((k, v) {
+        if (v.isNotEmpty && !_savedByReviewer.contains(k)) _clWhy[k] = v;
+      });
+      final auditCl = _stringMap(audit['cl']);
+      // A card the reader looked at and could not settle must not keep a 'fail'
+      // that reads as a proven mismatch.
+      _aiStatus.forEach((k, st) {
+        if (st == 'unresolved' && !_savedByReviewer.contains(k) && (auditCl[k] ?? '').isEmpty) _cl[k] = null;
+      });
+      auditCl.forEach((k, v) {
+        if (v.isEmpty || _savedByReviewer.contains(k)) return;
+        _cl[k] = v;
+        _aiVerified.add(k);
+        // The chassis punch has a field of its own, which the report reads first.
+        if (k == 'docChassis' && (_chassisPunch ?? '').isEmpty) _chassisPunch = chassisPunchLabels[v];
+      });
+    });
+  }
+
+  /// True while the reader is still working on this card.
+  bool _aiPending(String key) => _aiRunning && aiAnsweredKeys.contains(key) && !_savedByReviewer.contains(key);
+
+  String get _reviewerName => currentUserName.isNotEmpty ? currentUserName : 'the reviewer';
+
+  void _setCl(String key, String value) {
+    setState(() {
+      // A manual choice replaces the machine's.
+      _aiVerified.remove(key);
+      _cl[key] = _cl[key] == value ? null : value;
+      _clWhy[key] = _cl[key] == null
+          ? 'Cleared by $_reviewerName.'
+          : 'Set manually by $_reviewerName — overrides the automatic check.';
+      _savedByReviewer.add(key);
+      // The chassis punch pills also write the chassis punch itself.
+      if (key == 'docChassis') _chassisPunch = chassisPunchLabels[value];
+    });
   }
 
   // Mirrors the web portal's checkReturnStatus parser for QC step.
@@ -521,20 +689,11 @@ class _QcDetailPageState extends State<QcDetailPage> {
     return "";
   }
 
+  /// Day-first, as the portal shows every date. These are read-only displays.
   String _fmtDate(String s) {
     if (s.isEmpty || s == "null") return "";
-    try {
-      return DateFormat('yyyy-MM-dd').format(DateTime.parse(s));
-    } catch (_) {
-      return s.split("T").first;
-    }
-  }
-
-  String _displayBool(String s) {
-    final lower = s.toLowerCase();
-    if (lower == "true" || lower == "yes" || lower == "1") return "Yes";
-    if (lower == "false" || lower == "no" || lower == "0") return "No";
-    return s.isEmpty ? "-" : s;
+    final shown = formatDdMmYyyy(s);
+    return shown.isEmpty ? s.split("T").first : shown;
   }
 
   // ===========================================================================
@@ -542,193 +701,111 @@ class _QcDetailPageState extends State<QcDetailPage> {
   // ===========================================================================
 
   Map<String, dynamic> _buildQcPayload(String assigneeName, String assigneePhone, String assigneeEmail) {
-    final num? amount = num.tryParse(_valuationAmountController.text.trim());
-
-    final paymentDateText = _paymentDateController.text;
-    final paymentDateIso = paymentDateText.isEmpty
-        ? DateTime.now().toUtc().toIso8601String()
-        : (DateTime.tryParse(paymentDateText) ?? DateTime.now()).toUtc().toIso8601String();
-    final num paymentAmount = num.tryParse(_paymentAmountController.text) ?? 0;
-
     return {
-      // Web portal saves both overallRating + overallCondition with same value
-      "overallRating": _selectedOverallCondition ?? '',
-      "overallCondition": _selectedOverallCondition ?? '',
-      "finalRecommendation": _selectedFinalRecommendation ?? '',
-      "valuationAmount": amount ?? 0,
-      "chassisPunch": _selectedChassisPunch ?? '',
-      "remarks": _qcRemarksController.text.isEmpty ? null : _qcRemarksController.text,
+      "overallRating": _overallRatingController.text.trim(),
+      "valuationAmount": num.tryParse(_valuationAmountController.text.trim()) ?? 0,
+      "chassisPunch": _chassisPunch ?? '',
+      // An emptied box goes as "", not null: the API skips null as "not sent", so
+      // deleted remarks used to come back. The report prints its standard remark for "".
+      "remarks": _qcRemarksController.text.trim(),
       "assignedTo": assigneeName,
       "assignedToPhoneNumber": assigneePhone,
       "assignedToEmail": assigneeEmail,
       "assignedToWhatsapp": assigneePhone,
-      // Payment in same body — web portal does this in buildPayload.
-      "paymentStatus": _selectedPaymentStatus ?? 'Pending',
-      "paymentReference": _paymentReferenceController.text,
-      "paymentDate": paymentDateIso,
-      "paymentMethod": _selectedPaymentMethod ?? 'Online',
-      "paymentAmount": paymentAmount,
-      // Checklist — web portal sends these in the same QC body.
       "qcChecklist": _cl,
       "qcChecklistRemarks": _clRemarks,
+      "qcChecklistReviewerKeys": _savedByReviewer.toList(),
     };
   }
 
-  Future<void> _onSave() async {
-    if (!(_qcFormKey.currentState?.validate() ?? false)) {
-      _showError("Please fill all required fields (*)");
-      return;
-    }
-    if (_selectedChassisPunch == null) {
-      _showError("Please select Chassis Punch status");
-      return;
-    }
-    if (_selectedOverallCondition == null) {
-      _showError("Please select Overall Vehicle Condition");
-      return;
-    }
-    if (_selectedFinalRecommendation == null) {
-      _showError("Please select Final QC Recommendation");
-      return;
-    }
+  /// The portal's required fields, by name.
+  bool _checkQcForm() {
+    final missing = <String>[];
+    if (_overallRatingController.text.trim().isEmpty) missing.add("Overall rating");
+    final amount = num.tryParse(_valuationAmountController.text.trim());
+    if (_valuationAmountController.text.trim().isEmpty) missing.add("Valuation amount");
+    if ((_chassisPunch ?? '').isEmpty) missing.add("Chassis punch status");
+    final problems = <String>[
+      if (missing.isNotEmpty) "Required: ${missing.join(', ')}",
+      if (_valuationAmountController.text.trim().isNotEmpty && (amount == null || amount < 0))
+        "Valuation amount must be a number, 0 or more",
+    ];
+    if (problems.isEmpty) return true;
+    _showError(problems.join("\n"));
+    return false;
+  }
 
+  ({String name, String phone, String email}) _assignee() {
+    final user = FirebaseAuth.instance.currentUser;
+    final name = currentUserName.isNotEmpty
+        ? currentUserName
+        : (user?.displayName ?? user?.email?.split('@').first ?? user?.phoneNumber ?? 'User');
+    return (name: name, phone: currentUserPhone.isNotEmpty ? currentUserPhone : (user?.phoneNumber ?? ''), email: user?.email ?? '');
+  }
+
+  Future<void> _onSave() async {
+    if (!_checkQcForm()) return;
     setState(() => _isSaving = true);
     final ctx = _ctx();
-    final user = FirebaseAuth.instance.currentUser;
-    final assignee = user?.displayName ?? user?.email?.split('@').first ?? user?.phoneNumber ?? 'QC Reviewer';
-    final phone = user?.phoneNumber ?? '';
-    final email = user?.email ?? '';
+    final a = _assignee();
 
-    // 1. PUT QC details (includes payment fields per web portal pattern)
-    final qcRes = await api.updateQualityControlDetails(
-      ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
-      _buildQcPayload(assignee, phone, email),
-    );
+    final qcRes = await api.updateQualityControlDetails(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, _buildQcPayload(a.name, a.phone, a.email));
     if (!mounted) return;
     if (qcRes['success'] != true) {
       setState(() => _isSaving = false);
-      _showError("QC save failed: ${qcRes['message']}");
+      _showError("Save failed: ${qcRes['message']}");
       return;
     }
 
-    // 2. Also save payment to the dedicated /payments endpoint — AVO pattern.
-    // Web portal embeds payment in QC body; backend may handle it from either
-    // place but the dedicated endpoint is the canonical one used elsewhere.
-    final payRes = await api.savePayment(
+    await api.startWorkflow(ctx["id"]!, 4, ctx["vNo"]!, ctx["contact"]!);
+    await api.updateWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, {
+      "workflow": "QC",
+      "workflowStepOrder": 4,
+      "assignedTo": a.name,
+      "assignedToPhoneNumber": a.phone,
+      "assignedToEmail": a.email,
+      "assignedToWhatsapp": a.phone,
+      "qualityControlAssignedTo": a.name,
+      "qualityControlAssignedToPhoneNumber": a.phone,
+      "qualityControlAssignedToEmail": a.email,
+      "qualityControlAssignedToWhatsapp": a.phone,
+    });
+    await api.assignQualityControl(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, a.name, a.phone, a.email, a.phone);
+    await api.assignValuation(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, a.name, a.phone, a.email, a.phone);
+    await api.addWorkflowHistory(
       valuationId: ctx["id"]!,
-      vehicleNumber: ctx["vNo"]!,
-      applicantContact: ctx["contact"]!,
-      paymentStatus: _selectedPaymentStatus ?? 'Pending',
-      paymentReference: _paymentReferenceController.text,
-      paymentDate: _paymentDateController.text.isEmpty
-          ? DateTime.now().toUtc().toIso8601String()
-          : (DateTime.tryParse(_paymentDateController.text) ?? DateTime.now()).toUtc().toIso8601String(),
-      paymentMethod: _selectedPaymentMethod ?? 'Online',
-      paymentAmount: num.tryParse(_paymentAmountController.text) ?? 0,
+      action: "Quality Control Details Saved",
+      remarks: "Quality control saved",
+      performedByUserId: currentUserId,
+      performedByUserName: currentUserName,
+      statusTo: "QC",
     );
-    if (!mounted) return;
-    if (payRes['success'] != true) {
-      // Log but continue — QC payload already includes payment fields.
-      debugPrint("WARN: separate payment save failed (non-fatal): ${payRes['message']}");
-    }
-
-    // 3. startWorkflow(4) — ensure QC step is in InProgress
-    final startRes = await api.startWorkflow(ctx["id"]!, 4, ctx["vNo"]!, ctx["contact"]!);
-    if (!mounted) return;
-    if (startRes['success'] != true) {
-      debugPrint("DEBUG: startWorkflow(4) on save failed (likely already started): ${startRes['message']}");
-    }
-
-    // 4. updateWorkflowTable for QC
-    final tableRes = await api.updateWorkflowTable(
-      ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
-      {
-        "workflow": "QC",
-        "workflowStepOrder": 4,
-        "assignedTo": assignee,
-        "assignedToPhoneNumber": phone,
-        "assignedToEmail": email,
-        "assignedToWhatsapp": phone,
-        "qualityControlAssignedTo": assignee,
-        "qualityControlAssignedToPhoneNumber": phone,
-        "qualityControlAssignedToEmail": email,
-        "qualityControlAssignedToWhatsapp": phone,
-      },
-    );
-    if (!mounted) return;
-    if (tableRes['success'] != true) {
-      debugPrint("DEBUG: updateWorkflowTable on save failed: ${tableRes['message']}");
-    }
-
-    // 5. Assign QC + Valuation (web portal does both)
-    await api.assignQualityControl(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, assignee, phone, email, phone);
-    await api.assignValuation(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, assignee, phone, email, phone);
-
-    await _loadAllData();
     if (!mounted) return;
     setState(() {
       _isSaving = false;
-      _isEditing = false;
+      _saved = true;
     });
-    _showSuccess("Saved successfully");
+    _showSuccess("Quality control saved successfully");
   }
 
   Future<void> _onSubmit() async {
-    if (!(_qcFormKey.currentState?.validate() ?? false)) {
-      _showError("Please fill all required fields (*)");
+    if (!_saved) {
+      _showError("Save the quality control first, then submit.");
       return;
     }
-    if (_selectedChassisPunch == null) {
-      _showError("Please select Chassis Punch status");
-      return;
-    }
-    if (_selectedOverallCondition == null) {
-      _showError("Please select Overall Vehicle Condition");
-      return;
-    }
-    if (_selectedFinalRecommendation == null) {
-      _showError("Please select Final QC Recommendation");
-      return;
-    }
-
+    if (!_checkQcForm()) return;
     setState(() => _isSubmitting = true);
     final ctx = _ctx();
-    final user = FirebaseAuth.instance.currentUser;
-    final assignee = user?.displayName ?? user?.email?.split('@').first ?? user?.phoneNumber ?? 'QC Reviewer';
-    final phone = user?.phoneNumber ?? '';
-    final email = user?.email ?? '';
+    final a = _assignee();
 
-    // 1. PUT QC details
-    final qcRes = await api.updateQualityControlDetails(
-      ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
-      _buildQcPayload(assignee, phone, email),
-    );
+    final qcRes = await api.updateQualityControlDetails(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, _buildQcPayload(a.name, a.phone, a.email));
     if (!mounted) return;
     if (qcRes['success'] != true) {
       setState(() => _isSubmitting = false);
-      _showError("Submit failed at QC save: ${qcRes['message']}");
+      _showError("Submit failed: ${qcRes['message']}");
       return;
     }
 
-    // 2. Payment
-    final payRes = await api.savePayment(
-      valuationId: ctx["id"]!,
-      vehicleNumber: ctx["vNo"]!,
-      applicantContact: ctx["contact"]!,
-      paymentStatus: _selectedPaymentStatus ?? 'Pending',
-      paymentReference: _paymentReferenceController.text,
-      paymentDate: _paymentDateController.text.isEmpty
-          ? DateTime.now().toUtc().toIso8601String()
-          : (DateTime.tryParse(_paymentDateController.text) ?? DateTime.now()).toUtc().toIso8601String(),
-      paymentMethod: _selectedPaymentMethod ?? 'Online',
-      paymentAmount: num.tryParse(_paymentAmountController.text) ?? 0,
-    );
-    if (!mounted) return;
-    if (payRes['success'] != true) {
-      debugPrint("WARN: separate payment save failed: ${payRes['message']}");
-    }
-
-    // 3. completeWorkflow(4) — close QC step
     final completeRes = await api.completeWorkflow(ctx["id"]!, 4, ctx["vNo"]!, ctx["contact"]!);
     if (!mounted) return;
     if (completeRes['success'] != true) {
@@ -736,8 +813,6 @@ class _QcDetailPageState extends State<QcDetailPage> {
       _showError("Submit failed: could not complete QC step. ${completeRes['message']}");
       return;
     }
-
-    // 4. startWorkflow(5) — open Final Report step
     final startFr = await api.startWorkflow(ctx["id"]!, 5, ctx["vNo"]!, ctx["contact"]!);
     if (!mounted) return;
     if (startFr['success'] != true) {
@@ -746,35 +821,20 @@ class _QcDetailPageState extends State<QcDetailPage> {
       return;
     }
 
-    // 5. updateWorkflowTable to FinalReport
-    final tableRes = await api.updateWorkflowTable(
-      ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
-      {
-        "workflow": "FinalReport",
-        "workflowStepOrder": 5,
-        "assignedTo": assignee,
-        "assignedToPhoneNumber": phone,
-        "assignedToEmail": email,
-        "assignedToWhatsapp": phone,
-        "qualityControlAssignedTo": assignee,
-        "qualityControlAssignedToPhoneNumber": phone,
-        "qualityControlAssignedToEmail": email,
-        "qualityControlAssignedToWhatsapp": phone,
-      },
-    );
-    if (!mounted) return;
-    if (tableRes['success'] != true) {
-      debugPrint("WARN: updateWorkflowTable failed after QC Submit: ${tableRes['message']}");
-    }
-
-    // 6. Assign QC + Valuation again (web portal does on submit)
-    await api.assignQualityControl(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, assignee, phone, email, phone);
-    await api.assignValuation(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, assignee, phone, email, phone);
-
+    await api.updateWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, {
+      "workflow": "FinalReport",
+      "workflowStepOrder": 5,
+      "qualityControlAssignedTo": a.name,
+      "qualityControlAssignedToPhoneNumber": a.phone,
+      "qualityControlAssignedToEmail": a.email,
+      "qualityControlAssignedToWhatsapp": a.phone,
+    });
+    await api.assignQualityControl(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, a.name, a.phone, a.email, a.phone);
     await api.addWorkflowHistory(
       valuationId: ctx["id"]!,
-      action: "QC Submitted to Final Report",
-      remarks: "Quality control completed",
+      action: "Quality Control Submitted - Moving to Final Report",
+      remarks: "Quality control completed. Overall Rating: ${_overallRatingController.text}, "
+          "Valuation Amount: ₹${_valuationAmountController.text}. Status: QC Complete → Final Report In Progress",
       performedByUserId: currentUserId,
       performedByUserName: currentUserName,
       statusFrom: "QC",
@@ -976,13 +1036,6 @@ class _QcDetailPageState extends State<QcDetailPage> {
     if (mounted) setState(() => _notes = notes);
   }
 
-  Future<void> _selectDate(TextEditingController c) async {
-    final initial = DateTime.tryParse(c.text) ?? DateTime.now();
-    final picked = await showDatePicker(
-        context: context, initialDate: initial, firstDate: DateTime(1990), lastDate: DateTime(2040));
-    if (picked != null) setState(() => c.text = DateFormat('yyyy-MM-dd').format(picked));
-  }
-
   void _showError(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
@@ -1062,6 +1115,12 @@ class _QcDetailPageState extends State<QcDetailPage> {
               child: Column(
                 children: [
                   _buildHeaderCard(),
+                  const SizedBox(height: 12),
+                  CaseInfoBar(
+                    valuationId: _ctx()["id"]!,
+                    vehicleNumber: _ctx()["vNo"]!,
+                    applicantContact: _ctx()["contact"]!,
+                  ),
                   if (_returnedBy != null) ...[
                     const SizedBox(height: 12),
                     _buildReturnBanner(),
@@ -1069,15 +1128,11 @@ class _QcDetailPageState extends State<QcDetailPage> {
                   const SizedBox(height: 20),
                   _buildActions(),
                   const SizedBox(height: 20),
-                  _buildStakeholderSection(),
-                  _buildVehicleDetailsSection(),
-                  _buildInspectionDetailsSection(),
+                  // The case as the report lays it out, then QC's own work.
+                  _buildReportView(),
                   _buildQualityControlSection(),
                   _buildQcChecklistSection(),
-                  _buildPaymentSection(),
-                  _buildValuationRangesSection(),
                   _buildAiResponseSection(),
-                  _buildPhotosSection(),
                   _buildNotesSection(),
                   const SizedBox(height: 20),
                   _buildActions(),
@@ -1255,7 +1310,7 @@ class _QcDetailPageState extends State<QcDetailPage> {
         const SizedBox(width: 8),
         Expanded(
           child: ElevatedButton(
-            onPressed: isProcessing ? null : _onSubmit,
+            onPressed: isProcessing || !_saved ? null : _onSubmit,
             style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF3F51B5),
                 foregroundColor: Colors.white,
@@ -1299,256 +1354,131 @@ class _QcDetailPageState extends State<QcDetailPage> {
   // Final Report sections (read-only previews)
   // ---------------------------------------------------------------------------
 
-  Widget _buildStakeholderSection() {
-    return _buildSectionContainer("Stakeholder", [
-      _buildReadOnly("Stakeholder Name", _readStr(_finalReport, ['stakeholder.name', 'stakeholderName'])),
-      _buildReadOnly("Executive Name", _readStr(_finalReport, ['stakeholder.executiveName'])),
-      _buildReadOnly("Contact Number", _readStr(_finalReport, ['stakeholder.executiveContact'])),
-      _buildReadOnly("WhatsApp Number", _readStr(_finalReport, ['stakeholder.executiveWhatsapp'])),
-      _buildReadOnly("Email ID", _readStr(_finalReport, ['stakeholder.executiveEmail'])),
-      _buildReadOnly("Applicant Name", _readStr(_finalReport, ['stakeholder.applicant.name'])),
-      _buildReadOnly("Applicant Contact",
-          _readStr(_finalReport, ['stakeholder.applicant.contact', 'applicantContact'])),
-    ]);
-  }
-
-  Widget _buildVehicleDetailsSection() {
-    return _buildSectionContainer("Vehicle Details", [
-      _buildReadOnly("Registration Number", _readStr(_finalReport, ['vehicleDetails.registrationNumber'])),
-      _buildReadOnly("Make", _readStr(_finalReport, ['vehicleDetails.make'])),
-      _buildReadOnly("Model", _readStr(_finalReport, ['vehicleDetails.model'])),
-      _buildReadOnly("Year of Mfg", _readStr(_finalReport, ['vehicleDetails.yearOfMfg'])),
-      _buildReadOnly("Body Type", _readStr(_finalReport, ['vehicleDetails.bodyType'])),
-      _buildReadOnly("Chassis Number", _readStr(_finalReport, ['vehicleDetails.chassisNumber'])),
-      _buildReadOnly("Engine Number", _readStr(_finalReport, ['vehicleDetails.engineNumber'])),
-      _buildReadOnly("Color", _readStr(_finalReport, ['vehicleDetails.colour', 'vehicleDetails.color'])),
-      _buildReadOnly("Fuel Type", _readStr(_finalReport, ['vehicleDetails.fuel'])),
-      _buildReadOnly("Owner Name", _readStr(_finalReport, ['vehicleDetails.ownerName'])),
-      _buildReadOnly("RTO", _readStr(_finalReport, ['vehicleDetails.rto'])),
-    ]);
-  }
-
-  Widget _buildInspectionDetailsSection() {
-    final engineStarted = _readStr(_finalReport, ['inspectionDetails.engineStarted']);
-    final roadWorthy = _readStr(_finalReport, ['inspectionDetails.roadWorthyCondition']);
-
-    return _buildSectionContainer("Inspection Details", [
-      _buildReadOnly("Inspected By", _readStr(_finalReport, ['inspectionDetails.vehicleInspectedBy'])),
-      _buildReadOnly("Date of Inspection", _fmtDate(_readStr(_finalReport, ['inspectionDetails.dateOfInspection']))),
-      _buildReadOnly("Location", _readStr(_finalReport, ['inspectionDetails.inspectionLocation'])),
-      _buildReadOnly("Odometer Reading", _readStr(_finalReport, ['inspectionDetails.odometer'])),
-      _buildReadOnly("Engine Started", _displayBool(engineStarted)),
-      _buildReadOnly("Road Worthy Condition", _displayBool(roadWorthy)),
-      _buildReadOnly("Overall Tyre Condition",
-          _displayBool(_readStr(_finalReport, ['inspectionDetails.overallTyreCondition']))),
-      _buildReadOnly("Engine Condition",
-          _displayBool(_readStr(_finalReport, ['inspectionDetails.engineCondition']))),
-      _buildReadOnly("Brake System Condition",
-          _displayBool(_readStr(_finalReport, ['inspectionDetails.brakeSystem']))),
-    ]);
+  Color _bandColor(double? score) {
+    switch (scoreBand(score)) {
+      case ScoreBand.good:
+        return Colors.green.shade700;
+      case ScoreBand.average:
+        return Colors.orange.shade800;
+      case ScoreBand.poor:
+        return Colors.red.shade700;
+      case null:
+        return Colors.grey;
+    }
   }
 
   Widget _buildQualityControlSection() {
     final canEdit = _isEditing;
-    return Form(
-      key: _qcFormKey,
-      child: _buildSectionContainer("Quality Control", [
-        // ── Valuation Amount ──
-        _buildEditField(
-          "Valuation Amount (₹)",
-          _valuationAmountController,
-          isEditable: canEdit,
-          isRequired: true,
-          keyboardType: TextInputType.number,
-        ),
-
-        // ── Chassis Punch — button picker ──
-        _buildButtonPicker(
-          label: "Chassis Punch",
-          options: _chassisPunchOptions,
-          selected: _selectedChassisPunch,
-          isEditable: canEdit,
-          isRequired: true,
-          onChanged: (v) => setState(() => _selectedChassisPunch = v),
-          optionColors: const {
-            'Original': Colors.green,
-            'Re-Punched': Colors.orange,
-            'Tampered': Colors.red,
-          },
-        ),
-
-        // ── Overall Vehicle Condition — button picker ──
-        _buildButtonPicker(
-          label: "Overall Vehicle Condition",
-          options: _overallConditionOptions,
-          selected: _selectedOverallCondition,
-          isEditable: canEdit,
-          isRequired: true,
-          onChanged: (v) => setState(() => _selectedOverallCondition = v),
-          optionColors: const {
-            'Good': Colors.green,
-            'Average': Colors.orange,
-            'Poor': Colors.red,
-          },
-        ),
-
-        // ── Final QC Recommendation — button picker ──
-        _buildButtonPicker(
-          label: "Final QC Recommendation",
-          options: _finalRecommendationOptions,
-          selected: _selectedFinalRecommendation,
-          isEditable: canEdit,
-          isRequired: true,
-          onChanged: (v) => setState(() => _selectedFinalRecommendation = v),
-          optionColors: const {
-            'Recommended': Colors.green,
-            'Recommended with Conditions': Colors.orange,
-            'Not Recommended': Colors.red,
-          },
-        ),
-
-        // ── QC Officer (read-only) ──
-        _buildReadOnly(
-          "QC Officer",
-          FirebaseAuth.instance.currentUser?.displayName ??
-              (widget.summaryData['assignedTo']?.toString().isNotEmpty == true
-                  ? widget.summaryData['assignedTo'].toString()
-                  : 'QC Officer'),
-        ),
-
-        // ── QC Review Date (read-only, today) ──
-        _buildReadOnly(
-          "QC Review Date",
-          DateFormat('d MMM yyyy').format(DateTime.now()),
-        ),
-
-        // ── Remarks ──
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text("QC Summary Remarks",
-                  style: TextStyle(color: Colors.grey[600], fontSize: 14)),
-              const SizedBox(height: 6),
-              TextField(
-                controller: _qcRemarksController,
-                readOnly: !canEdit,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.all(12)),
+    final derived = _overallScore != null;
+    return _buildSectionContainer("Quality Control", [
+      // Derived from the AVO's section scores; not editable here.
+      if (_sectionScores.isNotEmpty)
+        Container(
+          margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey.shade300),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text("Overall Vehicle Score", style: TextStyle(fontWeight: FontWeight.bold)),
+                  Text("Average of the ${_sectionScores.length} inspection section scores recorded by the AVO",
+                      style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600)),
+                ]),
               ),
-            ],
-          ),
-        ),
-      ], isOpen: true),
-    );
-  }
-
-  /// Visual button-group picker (mirrors web portal rec-card style).
-  Widget _buildButtonPicker({
-    required String label,
-    required List<String> options,
-    required String? selected,
-    required bool isEditable,
-    bool isRequired = false,
-    required Function(String) onChanged,
-    Map<String, Color> optionColors = const {},
-  }) {
-    if (!isEditable) {
-      // Read-only view — show value as plain text
-      return _buildReadOnly(label, selected ?? '-');
-    }
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          RichText(
-            text: TextSpan(
-              text: label,
-              style: TextStyle(color: Colors.grey[700], fontSize: 14),
-              children: [
-                if (isRequired)
-                  const TextSpan(
-                      text: " *", style: TextStyle(color: Colors.red))
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: options.map((opt) {
-              final isSelected = selected == opt;
-              final color = optionColors[opt] ?? Colors.blueGrey;
-              return GestureDetector(
-                onTap: () => onChanged(opt),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              Text(_overallScore?.toStringAsFixed(1) ?? '—',
+                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: _bandColor(_overallScore))),
+              Text(" / 10", style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+            ]),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 6, children: [
+              for (final sc in _sectionScores)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: isSelected ? color : Colors.grey[100],
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: isSelected ? color : Colors.grey.shade300,
-                      width: isSelected ? 2 : 1,
-                    ),
+                    border: Border.all(color: Colors.grey.shade300),
                   ),
-                  child: Text(
-                    opt,
-                    style: TextStyle(
-                      color: isSelected ? Colors.white : Colors.grey[700],
-                      fontWeight:
-                          isSelected ? FontWeight.bold : FontWeight.normal,
-                      fontSize: 13,
-                    ),
-                  ),
+                  child: Text.rich(TextSpan(children: [
+                    TextSpan(text: "${sc.section}  ", style: const TextStyle(fontSize: 11)),
+                    TextSpan(
+                        text: sc.score?.toStringAsFixed(1) ?? '—',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _bandColor(sc.score))),
+                  ])),
                 ),
-              );
-            }).toList(),
-          ),
-          if (isRequired && selected == null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text("Please select an option",
-                  style: TextStyle(color: Colors.red[700], fontSize: 12)),
-            ),
-        ],
+            ]),
+          ]),
+        ),
+      _buildEditField(
+        "Overall Rating",
+        _overallRatingController,
+        // Locked when derived, so the score and the printed report cannot disagree.
+        // Typeable only when nothing is scored yet, so the case is not stuck.
+        isEditable: canEdit && !derived,
+        isRequired: true,
       ),
+      if (derived)
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text("Derived from the section scores above", style: TextStyle(fontSize: 11.5, color: Colors.grey)),
+        ),
+      _buildEditField(
+        "Valuation Amount (₹)",
+        _valuationAmountController,
+        isEditable: canEdit,
+        isRequired: true,
+        keyboardType: TextInputType.number,
+      ),
+      _buildReadOnly("Chassis Punch *", _chassisPunch ?? 'Not recorded — choose it under QC Recommendation'),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text("General Remarks", style: TextStyle(color: Colors.grey[600], fontSize: 14)),
+          const SizedBox(height: 6),
+          TextField(
+            controller: _qcRemarksController,
+            readOnly: !canEdit,
+            maxLines: 3,
+            decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.all(12)),
+          ),
+          const SizedBox(height: 4),
+          const Text('Left empty, the report prints "Vehicle found in good road worthy condition."',
+              style: TextStyle(fontSize: 11.5, color: Colors.grey)),
+        ]),
+      ),
+    ], isOpen: true);
+  }
+
+  /// The odometer comparison on the accOdo card: what the AVO typed and what the
+  /// photo reader took off the dial.
+  Widget? _odometerEvidence(String key) {
+    if (key != 'accOdo') return null;
+    final avoRaw = num.tryParse(_readStr(_finalReport, ['inspectionDetails.odometer']));
+    final avo = avoRaw != null && avoRaw > 0 ? avoRaw : null;
+    final photoRaw = _aiReadings == null ? null : num.tryParse('${_aiReadings!['odometerKm'] ?? ''}');
+    final photo = photoRaw != null && photoRaw > 0 ? photoRaw : null;
+    if (avo == null && photo == null) return null;
+    final fmt = NumberFormat.decimalPattern('en_IN');
+    final delta = avo != null && photo != null ? photo - avo : null;
+    Widget row(String l, String v, {bool bad = false}) => Row(children: [
+          SizedBox(width: 100, child: Text(l, style: TextStyle(fontSize: 12, color: Colors.grey.shade600))),
+          Text(v, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: bad ? Colors.red.shade700 : null)),
+        ]);
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        row("AVO recorded", avo != null ? "${fmt.format(avo)} km" : "not recorded"),
+        row("Photo reads",
+            photo != null ? "${fmt.format(photo)} km" : (_aiStatus['accOdo'] == 'unresolved' ? "could not be read" : "not read yet")),
+        if (delta != null)
+          row("Difference", delta == 0 ? "none" : "${delta > 0 ? '+' : ''}${fmt.format(delta)} km", bad: delta != 0),
+      ]),
     );
-  }
-
-  Widget _buildPaymentSection() {
-    final canEdit = _isEditing;
-    return _buildSectionContainer("Payment Collection", [
-      if (canEdit)
-        _buildDropdown("Payment Status", _paymentStatuses, _selectedPaymentStatus,
-            (v) => setState(() => _selectedPaymentStatus = v),
-            isMandatory: true)
-      else
-        _buildReadOnly("Payment Status", _selectedPaymentStatus ?? '-'),
-      _buildEditField("Payment Reference", _paymentReferenceController, isEditable: canEdit),
-      _buildDateField("Payment Date", _paymentDateController, canEdit, required: true),
-      if (canEdit)
-        _buildDropdown("Payment Method", _paymentMethods, _selectedPaymentMethod,
-            (v) => setState(() => _selectedPaymentMethod = v),
-            isMandatory: true)
-      else
-        _buildReadOnly("Payment Method", _selectedPaymentMethod ?? '-'),
-      _buildEditField("Payment Amount", _paymentAmountController,
-          isEditable: canEdit, isRequired: true, keyboardType: TextInputType.number),
-    ]);
-  }
-
-  Widget _buildValuationRangesSection() {
-    return _buildSectionContainer("Valuation Ranges (AI Estimate)", [
-      _buildReadOnly("Low Range (₹ Lacs)", _readStr(_finalReport, ['valuationResponse.lowRange'])),
-      _buildReadOnly("Mid Range (₹ Lacs)", _readStr(_finalReport, ['valuationResponse.midRange'])),
-      _buildReadOnly("High Range (₹ Lacs)", _readStr(_finalReport, ['valuationResponse.highRange'])),
-    ]);
   }
 
   Widget _buildAiResponseSection() {
@@ -1573,138 +1503,42 @@ class _QcDetailPageState extends State<QcDetailPage> {
   Widget _buildQcChecklistSection() {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Padding(
-            padding: EdgeInsets.only(left: 4, bottom: 8),
-            child: Text("QC Verification Checklist",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-          ),
-          // Editable only in edit mode — view mode is read-only.
-          QcChecklistWidget(
-            key: ValueKey('qc-checklist-$_isEditing'),
-            cl: _cl,
-            remarks: _clRemarks,
-            enabled: _isEditing,
-          ),
-        ],
+      child: QcChecklistView(
+        key: ValueKey('qc-checklist-$_isEditing'),
+        cl: _cl,
+        why: _clWhy,
+        remarks: _clRemarks,
+        enabled: _isEditing,
+        aiVerified: _aiVerified,
+        aiStatus: _aiStatus,
+        aiPending: _aiPending,
+        onSet: _setCl,
+        cardExtra: _odometerEvidence,
+        before: (id) {
+          if (id != 'acc') return null;
+          if (_aiError != null) {
+            return _banner("⚠ $_aiError — every check below is still yours to decide by eye.", Colors.orange.shade800);
+          }
+          if (_aiRunning) {
+            return _banner("Reading the inspection photos… the checks below will update when it finishes.", Colors.indigo);
+          }
+          return null;
+        },
       ),
     );
   }
 
-  Widget _buildPhotosSection() {
-    final photos = _finalReport['photoUrls'];
-    final List<MapEntry<String, dynamic>> entries = [];
-    if (photos is Map) {
-      photos.forEach((k, v) {
-        if (v != null && v.toString().isNotEmpty && v.toString().toLowerCase().startsWith('http')) {
-          entries.add(MapEntry(k.toString(), v));
-        }
-      });
-    }
-
-    return _buildSectionContainer("Photos", [
-      Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Gallery selection + annotation (portal's QC photo review flow)
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  final ctx = _ctx();
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => QcPhotoReviewPage(
-                        valuationId: ctx["id"]!,
-                        vehicleNumber: ctx["vNo"]!,
-                        applicantContact: ctx["contact"]!,
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.photo_library_outlined),
-                label: const Text("Report Photos — Select for Report"),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF007B7B),
-                  side: const BorderSide(color: Color(0xFF007B7B)),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            if (entries.isEmpty)
-              const Text("No photos available.", style: TextStyle(color: Colors.grey, fontStyle: FontStyle.italic))
-            else
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  crossAxisSpacing: 8,
-                  mainAxisSpacing: 8,
-                  childAspectRatio: 1.0,
-                ),
-                itemCount: entries.length,
-                itemBuilder: (_, i) {
-                  final e = entries[i];
-                  return Card(
-                    elevation: 1,
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () => _showFullScreenImage(e.value.toString(), e.key),
-                            child: ClipRRect(
-                              borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
-                              child: Image.network(
-                                e.value.toString(),
-                                fit: BoxFit.cover,
-                                width: double.infinity,
-                                errorBuilder: (_, __, ___) => Container(
-                                  color: Colors.grey.shade200,
-                                  child: const Center(
-                                    child: Icon(Icons.broken_image, color: Colors.grey, size: 40),
-                                  ),
-                                ),
-                                loadingBuilder: (ctx, child, prog) => prog == null
-                                    ? child
-                                    : Container(
-                                        color: Colors.grey.shade100,
-                                        child: const Center(
-                                            child: SizedBox(
-                                                height: 24,
-                                                width: 24,
-                                                child: CircularProgressIndicator(strokeWidth: 2))),
-                                      ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.all(6),
-                          child: Text(
-                            e.key,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-          ],
+  Widget _banner(String text, Color color) => Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withOpacity(0.4)),
         ),
-      ),
-    ]);
-  }
+        child: Text(text, style: TextStyle(fontSize: 12.5, color: color)),
+      );
 
   Widget _buildNotesSection() {
     return Container(
@@ -1829,41 +1663,6 @@ class _QcDetailPageState extends State<QcDetailPage> {
               contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
         ),
       ]),
-    );
-  }
-
-  Widget _buildDropdown(String label, List<String> items, String? value, Function(String?) onChanged,
-      {bool isMandatory = false}) {
-    Widget labelWidget = RichText(
-      text: TextSpan(text: label, style: TextStyle(color: Colors.grey[600], fontSize: 14), children: [
-        if (isMandatory) const TextSpan(text: " *", style: TextStyle(color: Colors.red))
-      ]),
-    );
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        labelWidget,
-        const SizedBox(height: 6),
-        DropdownButtonFormField<String>(
-          value: value,
-          isExpanded: true,
-          decoration: const InputDecoration(
-              border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
-          items: items
-              .map((it) => DropdownMenuItem(value: it, child: Text(it, style: const TextStyle(fontSize: 13))))
-              .toList(),
-          onChanged: onChanged,
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildDateField(String label, TextEditingController controller, bool isEditable, {bool required = false}) {
-    return GestureDetector(
-      onTap: isEditable ? () => _selectDate(controller) : null,
-      child: AbsorbPointer(
-        child: _buildEditField(label, controller, isEditable: isEditable, isRequired: required),
-      ),
     );
   }
 }

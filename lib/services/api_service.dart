@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
+import 'brand.dart';
 
 class ApiService {
   /// Production since 2026-09-22: the vehgaprod resource group in the company
@@ -33,7 +34,7 @@ class ApiService {
   Future<Map<String, dynamic>> loginUser(String inputPhone) async {
     try {
       final allUsersUrl = Uri.parse('$baseUrl/users/all');
-      final response = await http.get(allUsersUrl).timeout(_loginTimeout);
+      final response = await apiHttp.get(allUsersUrl).timeout(_loginTimeout);
       if (response.statusCode == 200) {
         List<dynamic> allUsers = jsonDecode(response.body);
         var user = allUsers.firstWhere(
@@ -73,7 +74,8 @@ class ApiService {
 
   // Internal helper used by advanceToNextStage (legacy self-healing) AND
   // by the new explicit startWorkflow/completeWorkflow methods.
-  Future<Map<String, dynamic>> _workflowAction(String id, int stepOrder, String vehicleNo, String contact, String action) async {
+  Future<Map<String, dynamic>> _workflowAction(String id, int stepOrder, String vehicleNo, String contact, String action,
+      {Map<String, String> extraQuery = const {}}) async {
     // CRITICAL: Preserve EXACT case from database - Cosmos DB partition keys are case-sensitive
     vehicleNo = vehicleNo.trim();
     contact = contact.trim();
@@ -86,13 +88,14 @@ class ApiService {
       final uri = Uri.parse('$baseUrl/valuations/$id/workflow/$stepOrder/$action').replace(
         queryParameters: {
           "vehicleNumber": vehicleNo,
-          "applicantContact": contact
+          "applicantContact": contact,
+          ...extraQuery,
         }
       );
 
       debugPrint("DEBUG: Workflow action $action for step $stepOrder with vehicle: $vehicleNo");
 
-      final response = await http.post(
+      final response = await apiHttp.post(
         uri,
         headers: {"Accept": "application/json"},
       ).timeout(_defaultTimeout);
@@ -220,7 +223,7 @@ class ApiService {
 
     try {
       final uri = Uri.parse('$baseUrl/valuations/$id/workflow/return');
-      final response = await http.post(
+      final response = await apiHttp.post(
         uri,
         headers: {"Accept": "application/json", "Content-Type": "application/json"},
         body: jsonEncode({
@@ -249,8 +252,12 @@ class ApiService {
   }
 
   /// POST /valuations/{id}/workflow/{stepOrder}/complete?vehicleNumber=X&applicantContact=Y
-  Future<Map<String, dynamic>> completeWorkflow(String id, int stepOrder, String vehicleNo, String contact) async {
-    return _workflowAction(id, stepOrder, vehicleNo, contact, 'complete');
+  /// [approvedBy] on step 5 is the approver: the backend completes the workflow
+  /// row and dispatches the report itself, as it does for the portal's Approve.
+  Future<Map<String, dynamic>> completeWorkflow(String id, int stepOrder, String vehicleNo, String contact,
+      {String? approvedBy}) async {
+    return _workflowAction(id, stepOrder, vehicleNo, contact, 'complete',
+        extraQuery: {if (approvedBy != null && approvedBy.isNotEmpty) "approvedBy": approvedBy});
   }
 
   /// PUT /valuations/{id}/workflow/Table — updates Azure Table Storage row.
@@ -273,7 +280,7 @@ class ApiService {
         ...fields,
       });
 
-      final response = await http.put(
+      final response = await apiHttp.put(
         uri,
         headers: {"Accept": "application/json", "Content-Type": "application/json"},
         body: body,
@@ -301,7 +308,7 @@ class ApiService {
       final uri = Uri.parse('$baseUrl/valuations/$id/workflow/Table').replace(
         queryParameters: {"vehicleNumber": vehicleNo.trim(), "applicantContact": contact.trim()},
       );
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final body = response.body.trim();
         if (body.isEmpty) return {};
@@ -346,7 +353,7 @@ class ApiService {
         "overrideAssigneeId": overrideAssigneeId,
       });
 
-      final response = await http.post(
+      final response = await apiHttp.post(
         uri,
         headers: {"Accept": "application/json", "Content-Type": "application/json"},
         body: body,
@@ -374,7 +381,7 @@ class ApiService {
   Future<Map<String, dynamic>> getPayment(String valuationId) async {
     try {
       final uri = Uri.parse('$baseUrl/payments/$valuationId');
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final body = response.body.trim();
         if (body.isEmpty) return {};
@@ -402,6 +409,7 @@ class ApiService {
     required String paymentMethod,
     required num paymentAmount,
     String? paymentNotes,
+    String? savedBy,
   }) async {
     try {
       final uri = Uri.parse('$baseUrl/payments');
@@ -416,9 +424,10 @@ class ApiService {
         "paymentMethod": paymentMethod,
         "paymentAmount": paymentAmount,
         "paymentNotes": paymentNotes ?? "",
+        "savedBy": savedBy ?? "",
       });
 
-      final response = await http.put(
+      final response = await apiHttp.put(
         uri,
         headers: {"Accept": "application/json", "Content-Type": "application/json"},
         body: body,
@@ -455,7 +464,7 @@ class ApiService {
       final uri = Uri.parse('$baseUrl/valuations/$id/photos/validate').replace(
         queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()},
       );
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
 
       if (response.statusCode == 200) {
         final body = response.body.trim();
@@ -467,9 +476,13 @@ class ApiService {
           final isComplete = decoded['isComplete'] ?? decoded['IsComplete'] ?? false;
           final missingRaw = decoded['missingPhotos'] ?? decoded['MissingPhotos'] ?? [];
           final missing = (missingRaw is List) ? missingRaw.map((e) => e.toString()).toList() : <String>[];
+          final mediaOptional = decoded['mediaOptional'] ?? decoded['MediaOptional'] ?? false;
           return {
             "isComplete": isComplete == true,
             "missingPhotos": missing,
+            // The client needs no photos or video (ClientRules__MediaOptionalClients),
+            // so nothing on the photo page is required.
+            "mediaOptional": mediaOptional == true,
           };
         }
       }
@@ -502,6 +515,30 @@ class ApiService {
   /// Triggers the AI valuation assist via GET /api/valuations/{id}/valuation.
   /// The backend calls OpenAI/GPT internally and stores the result in the document.
   /// Has a 30s timeout — if AI is slow, Submit hangs up to 30s rather than forever.
+  /// GET /valuations/{id}/valuation — the market range (low / mid / high), as the
+  /// portal's getMarketRange asks for it. Returns what is stored, and generates
+  /// one only for a case that has none. Null when it could not be had.
+  Future<Map<String, num?>?> getMarketRange(String id, String vNo, String contact) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$id/valuation').replace(queryParameters: {
+        "vehicleNumber": vNo.trim(),
+        "applicantContact": contact.trim(),
+        "force": "false",
+      });
+      final response = await apiHttp.get(uri).timeout(_aiTimeout);
+      if (response.statusCode < 200 || response.statusCode >= 300) return null;
+      final data = jsonDecode(response.body);
+      if (data is! Map) return null;
+      num? n(String k) {
+        final v = data[k] ?? data[k[0].toUpperCase() + k.substring(1)];
+        return v is num ? v : num.tryParse('${v ?? ''}');
+      }
+      return {"lowRange": n('lowRange'), "midRange": n('midRange'), "highRange": n('highRange')};
+    } catch (e) {
+      return null;
+    }
+  }
+
   Future<Map<String, dynamic>> getValuationDetailsfromAI(String id, String vNo, String contact) async {
     if (vNo.trim().isEmpty) vNo = "UNKNOWN";
     if (contact.trim().isEmpty) contact = "0000000000";
@@ -510,7 +547,7 @@ class ApiService {
       final uri = Uri.parse('$baseUrl/valuations/$id/valuation').replace(
         queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()},
       );
-      final response = await http.get(uri).timeout(_aiTimeout);
+      final response = await apiHttp.get(uri).timeout(_aiTimeout);
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return {"success": true};
@@ -535,7 +572,7 @@ class ApiService {
   Future<List<Map<String, dynamic>>> getUsersByRole(String role) async {
     try {
       final uri = Uri.parse('$baseUrl/users/roles/$role');
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         if (decoded is List) {
@@ -554,7 +591,7 @@ class ApiService {
 
   Future<List<Map<String, dynamic>>> _getUsersByRoleFallback(String role) async {
     try {
-      final response = await http.get(Uri.parse('$baseUrl/users/all')).timeout(_defaultTimeout);
+      final response = await apiHttp.get(Uri.parse('$baseUrl/users/all')).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         if (decoded is List) {
@@ -578,7 +615,7 @@ class ApiService {
   Future<Map<String, dynamic>> getUserById(String userId) async {
     try {
       final uri = Uri.parse('$baseUrl/users/${Uri.encodeComponent(userId)}');
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         if (decoded is Map<String, dynamic>) return decoded;
@@ -594,7 +631,7 @@ class ApiService {
   Future<List<String>> getUserRoles(String userId) async {
     try {
       final uri = Uri.parse('$baseUrl/users/${Uri.encodeComponent(userId)}/roles');
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         if (decoded is List) return decoded.map((e) => e.toString()).toList();
@@ -616,7 +653,7 @@ class ApiService {
     try {
       final uri = Uri.parse('$baseUrl/valuations/workflows/open/user-dashboard').replace(
           queryParameters: {"phone": phone, "role": role});
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         if (decoded is Map<String, dynamic>) return decoded;
@@ -691,7 +728,7 @@ class ApiService {
 
     try {
       final uri = Uri.parse('$baseUrl/valuations/check-duplicate').replace(queryParameters: params);
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         if (decoded is Map<String, dynamic>) {
@@ -721,7 +758,7 @@ class ApiService {
   }) async {
     try {
       final now = DateTime.now().toUtc().toIso8601String();
-      final response = await http.post(
+      final response = await apiHttp.post(
         Uri.parse('$baseUrl/valuations/$valuationId/workflow/addhistory'),
         headers: {"Accept": "application/json", "Content-Type": "application/json"},
         body: jsonEncode({
@@ -771,7 +808,7 @@ class ApiService {
     try {
       final uri = Uri.parse('$baseUrl/valuations/$id/photos').replace(
           queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         if (decoded is Map<String, dynamic>) return decoded;
@@ -788,7 +825,7 @@ class ApiService {
     try {
       final uri = Uri.parse('$baseUrl/valuations/$id/photos/gallery-selection').replace(
           queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         if (decoded is List) return decoded.map((e) => e.toString()).toList();
@@ -804,7 +841,7 @@ class ApiService {
     try {
       final uri = Uri.parse('$baseUrl/valuations/$id/photos/gallery-selection').replace(
           queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
-      final response = await http.put(
+      final response = await apiHttp.put(
         uri,
         headers: {"Accept": "application/json", "Content-Type": "application/json"},
         body: jsonEncode(selectedKeys),
@@ -823,7 +860,7 @@ class ApiService {
     try {
       final uri = Uri.parse('$baseUrl/valuations/$id/photos/$photoKey/annotate').replace(
           queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
-      final response = await http.put(
+      final response = await apiHttp.put(
         uri,
         headers: {"Accept": "application/json", "Content-Type": "application/json"},
         body: jsonEncode({"note": note}),
@@ -845,7 +882,7 @@ class ApiService {
     try {
       final uri = Uri.parse('$baseUrl/valuations/$id/photos/custom').replace(
           queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       return response.statusCode == 200 ? jsonDecode(response.body) : [];
     } catch (e) {
       return [];
@@ -858,7 +895,7 @@ class ApiService {
     try {
       final uri = Uri.parse('$baseUrl/valuations/$id/photos/metadata').replace(
           queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         if (decoded is Map<String, dynamic>) return decoded;
@@ -875,7 +912,7 @@ class ApiService {
     try {
       final uri = Uri.parse('$baseUrl/valuations/$id/photos/$photoType/metadata').replace(
           queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
-      final response = await http.put(
+      final response = await apiHttp.put(
         uri,
         headers: {"Accept": "application/json", "Content-Type": "application/json"},
         body: jsonEncode({"capturedDate": capturedDate, "locationText": locationText}),
@@ -897,15 +934,73 @@ class ApiService {
   }
 
   // ===========================================================================
+  // 2m. CASE REFERENCE & SEARCH (matches web portal ValuationService / ClaimService)
+  // ===========================================================================
+
+  /// GET /valuations/{id}/reference — the case's Unique ID, e.g. VG-519499-K.
+  /// Idempotent: returns the stored reference, or assigns one if completing the
+  /// stakeholder step has not minted it yet. Null when the case is not found.
+  Future<String?> getReferenceNumber(String id, String vNo, String contact) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$id/reference').replace(
+          queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
+      if (response.statusCode != 200) return null;
+      final data = jsonDecode(response.body);
+      final ref = data is Map ? (data['referenceNumber'] ?? data['ReferenceNumber'])?.toString() : null;
+      return (ref == null || ref.isEmpty) ? null : ref;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// GET /valuations/search?q= — every case, open, completed and archived, by
+  /// Unique ID, vehicle, chassis or engine number. The portal sends terms of
+  /// three characters or more.
+  Future<List<dynamic>> searchCases(String term) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/search').replace(queryParameters: {"q": term.trim()});
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
+      if (response.statusCode != 200) return [];
+      final data = jsonDecode(response.body);
+      return data is List ? data : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// POST /valuations/{id}/stakeholder/assignment — records who registered the case.
+  Future<bool> assignStakeholder(String id, String vNo, String contact,
+      {required String name, String phone = '', String email = '', String whatsapp = ''}) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$id/stakeholder/assignment').replace(queryParameters: {
+        "valuationId": id,
+        "vehicleNumber": vNo.trim(),
+        "applicantContact": contact.trim(),
+        "assignedTo": name,
+        "assignedToPhoneNumber": phone,
+        "assignedToEmail": email,
+        "assignedToWhatsapp": whatsapp,
+      });
+      final response = await apiHttp.post(uri, headers: {"Accept": "application/json"}).timeout(_defaultTimeout);
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // ===========================================================================
   // 3. STAKEHOLDER (FILES & GENERAL DATA)
   // ===========================================================================
+  /// [id] keeps one form on one case: pass the id the first call returned, so a
+  /// second Save (or Save then Submit) updates that case instead of creating a
+  /// new one. The portal mints the id once per form for the same reason.
   Future<Map<String, dynamic>> createValuation(Map<String, String> formData,
-      {String? rcPath, String? insurancePath, String? otherPath,
+      {String? id, String? rcPath, String? insurancePath, String? otherPath,
       Uint8List? rcBytes, String? rcFilename,
       Uint8List? insuranceBytes, String? insuranceFilename,
       Uint8List? otherBytes, String? otherFilename}) async {
-    var uuid = const Uuid();
-    String newId = uuid.v4();
+    String newId = id ?? const Uuid().v4();
     final url = Uri.parse('$baseUrl/valuations/$newId/stakeholder');
     try {
       var request = http.MultipartRequest('PUT', url);
@@ -934,7 +1029,7 @@ class ApiService {
         request.files.add(await http.MultipartFile.fromPath('otherFiles', otherPath));
       }
 
-      var response = await http.Response.fromStream(await request.send());
+      var response = await http.Response.fromStream(await apiHttp.send(request));
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return {"success": true, "message": "Request Created Successfully!", "id": newId};
       }
@@ -976,7 +1071,7 @@ class ApiService {
         request.files.add(await http.MultipartFile.fromPath('otherFiles', otherPath));
       }
 
-      var response = await http.Response.fromStream(await request.send());
+      var response = await http.Response.fromStream(await apiHttp.send(request));
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return {"success": true, "message": "Updated Successfully!"};
       }
@@ -993,7 +1088,7 @@ class ApiService {
     final uri = Uri.parse('$baseUrl/valuations/$id/stakeholder').replace(
         queryParameters: {"vehicleNumber": vehicleNo.trim(), "applicantContact": contact.trim()});
     try {
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         var decoded = jsonDecode(response.body);
         if (decoded is List && decoded.isNotEmpty) {
@@ -1021,7 +1116,7 @@ class ApiService {
     String originalVNo = vNo.trim();
 
     try {
-      final rcRes = await http.get(Uri.parse('$baseUrl/valuations/$id/vehicledetails/with-rc').replace(
+      final rcRes = await apiHttp.get(Uri.parse('$baseUrl/valuations/$id/vehicledetails/with-rc').replace(
           queryParameters: {"vehicleNumber": originalVNo, "applicantContact": contact.trim()})).timeout(_defaultTimeout);
       if (rcRes.statusCode == 200) {
         data.addAll(normalize(jsonDecode(rcRes.body)));
@@ -1031,7 +1126,7 @@ class ApiService {
     }
 
     try {
-      final savedRes = await http.get(Uri.parse('$baseUrl/valuations/$id/vehicledetails').replace(
+      final savedRes = await apiHttp.get(Uri.parse('$baseUrl/valuations/$id/vehicledetails').replace(
           queryParameters: {"vehicleNumber": originalVNo, "applicantContact": contact.trim()})).timeout(_defaultTimeout);
       if (savedRes.statusCode == 200) {
         var saved = normalize(jsonDecode(savedRes.body));
@@ -1073,7 +1168,7 @@ class ApiService {
         if (k == 'BacklistStatus') request.fields['BlacklistStatus'] = val;
       });
 
-      var response = await http.Response.fromStream(await request.send());
+      var response = await http.Response.fromStream(await apiHttp.send(request));
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return {"success": true, "message": "Saved!"};
@@ -1084,26 +1179,54 @@ class ApiService {
     }
   }
 
-  Future<bool> assignBackendTask(String id, String vNo, String contact, String assigneeName) async {
-    if (vNo.trim().isEmpty) vNo = "UNKNOWN";
-    if (contact.trim().isEmpty) contact = "0000000000";
-
-    String originalVNo = vNo.trim();
-
+  /// POST /valuations/{id}/{step}/assignment — records who holds a stage. The
+  /// portal posts the same query string to every step's assignment endpoint.
+  Future<bool> _assign(String step, String id, String vNo, String contact,
+      String name, String phone, String email, String whatsapp) async {
     try {
-      final uri = Uri.parse('$baseUrl/valuations/$id/vehicledetails/assignment').replace(
-          queryParameters: {
-            "vehicleNumber": originalVNo,
-            "applicantContact": contact.trim(),
-            "assignedTo": assigneeName.trim()
-          });
-      final response = await http.post(
-        uri,
-        headers: {"Accept": "application/json"},
-      ).timeout(_defaultTimeout);
+      final uri = Uri.parse('$baseUrl/valuations/$id/$step/assignment').replace(queryParameters: {
+        "valuationId": id,
+        "id": id,
+        "vehicleNumber": vNo.trim(),
+        "applicantContact": contact.trim(),
+        "assignedTo": name,
+        "assignedToPhoneNumber": phone,
+        "assignedToEmail": email,
+        "assignedToWhatsapp": whatsapp,
+      });
+      final response = await apiHttp.post(uri, headers: {"Accept": "application/json"}).timeout(_defaultTimeout);
       return response.statusCode >= 200 && response.statusCode < 300;
     } catch (e) {
       return false;
+    }
+  }
+
+  /// The Backend stage's holder: the person who saved or submitted it, as in the
+  /// portal's ClaimService.assignBackend.
+  Future<bool> assignBackend(String id, String vNo, String contact,
+          String name, String phone, String email, String whatsapp) =>
+      _assign('vehicledetails', id, vNo, contact, name, phone, email, whatsapp);
+
+  /// The inspector the Backend page assigns the case to (portal UsersService.assignInspection).
+  Future<bool> assignInspection(String id, String vNo, String contact,
+          String name, String phone, String email, String whatsapp) =>
+      _assign('inspection', id, vNo, contact, name, phone, email, whatsapp);
+
+  /// GET /valuations/workflows/open/assignedto — the user the case is currently
+  /// assigned to, as the portal's case header shows it. Empty when nobody is.
+  Future<Map<String, dynamic>> getAssignedUser(String id, String vNo, String contact) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/workflows/open/assignedto').replace(queryParameters: {
+        "valuationId": id,
+        "vehicleNumber": vNo.trim(),
+        "applicantContact": contact.trim(),
+      });
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
+      if (response.statusCode != 200 || response.body.trim().isEmpty) return {};
+      final data = jsonDecode(response.body);
+      return data is Map<String, dynamic> ? data : {};
+    } catch (e) {
+      return {};
     }
   }
 
@@ -1115,7 +1238,7 @@ class ApiService {
     if (contact.trim().isEmpty) contact = "0000000000";
 
     try {
-      final response = await http.get(Uri.parse('$baseUrl/valuations/$id/inspection').replace(
+      final response = await apiHttp.get(Uri.parse('$baseUrl/valuations/$id/inspection').replace(
           queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()})).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         return (jsonDecode(response.body) as Map<String, dynamic>).map((k, v) => MapEntry(k.toLowerCase(), v));
@@ -1137,7 +1260,7 @@ class ApiService {
       data.forEach((k, v) {
         if (v != null) request.fields[k] = v.toString();
       });
-      var response = await http.Response.fromStream(await request.send());
+      var response = await http.Response.fromStream(await apiHttp.send(request));
       if (response.statusCode >= 200 && response.statusCode < 300) return {"success": true, "message": "Saved!"};
       return {"success": false, "message": "Inspection Save Failed: ${response.body}"};
     } catch (e) {
@@ -1188,7 +1311,7 @@ class ApiService {
         request.fields[k] = val;
       });
 
-      var response = await http.Response.fromStream(await request.send());
+      var response = await http.Response.fromStream(await apiHttp.send(request));
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return {"success": true};
       }
@@ -1213,7 +1336,7 @@ class ApiService {
     try {
       final uri = Uri.parse('$baseUrl/valuations/$id/qualitycontrol').replace(
           queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final body = response.body.trim();
         if (body.isEmpty) return {};
@@ -1228,6 +1351,36 @@ class ApiService {
     }
   }
 
+  /// POST /valuations/{id}/qualitycontrol/ai-photo-audit — the photo reader, as the
+  /// portal's QC page runs it on open. The backend keeps the answer against the
+  /// case's photo set, so only the first read of a case costs anything; [force]
+  /// reads again. Returns the audit ({cl, why, status, readings, readAt, error}),
+  /// or {"error": ...} when it could not run at all.
+  Future<Map<String, dynamic>> runAiPhotoAudit(String id, String vNo, String contact, {bool force = false}) async {
+    try {
+      final uri = Uri.parse('$baseUrl/valuations/$id/qualitycontrol/ai-photo-audit').replace(queryParameters: {
+        "vehicleNumber": vNo.trim(),
+        "applicantContact": contact.trim(),
+        if (force) "force": "true",
+      });
+      final response = await apiHttp
+          .post(uri, headers: {"Accept": "application/json"})
+          .timeout(const Duration(minutes: 2));
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final data = jsonDecode(response.body);
+        return data is Map<String, dynamic> ? data : {"error": "The photo reader returned nothing."};
+      }
+      var message = 'Could not reach the photo reader.';
+      try {
+        final d = jsonDecode(response.body);
+        if (d is Map && d['message'] != null) message = d['message'].toString();
+      } catch (_) {}
+      return {"error": message};
+    } catch (e) {
+      return {"error": "Could not reach the photo reader."};
+    }
+  }
+
   /// PUT /valuations/{id}/qualitycontrol — JSON body (NOT multipart, per web service)
   Future<Map<String, dynamic>> updateQualityControlDetails(
       String id, String vNo, String contact, Map<String, dynamic> body) async {
@@ -1237,7 +1390,7 @@ class ApiService {
     try {
       final uri = Uri.parse('$baseUrl/valuations/$id/qualitycontrol').replace(
           queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
-      final response = await http.put(
+      final response = await apiHttp.put(
         uri,
         headers: {"Accept": "application/json", "Content-Type": "application/json"},
         body: jsonEncode(body),
@@ -1270,7 +1423,7 @@ class ApiService {
           "assignedToWhatsapp": whatsapp,
         },
       );
-      final response = await http.post(uri, headers: {"Accept": "application/json"}).timeout(_defaultTimeout);
+      final response = await apiHttp.post(uri, headers: {"Accept": "application/json"}).timeout(_defaultTimeout);
       return response.statusCode >= 200 && response.statusCode < 300;
     } catch (e) {
       return false;
@@ -1292,7 +1445,7 @@ class ApiService {
           "assignedToWhatsapp": whatsapp,
         },
       );
-      final response = await http.post(uri, headers: {"Accept": "application/json"}).timeout(_defaultTimeout);
+      final response = await apiHttp.post(uri, headers: {"Accept": "application/json"}).timeout(_defaultTimeout);
       return response.statusCode >= 200 && response.statusCode < 300;
     } catch (e) {
       return false;
@@ -1310,7 +1463,7 @@ class ApiService {
     try {
       final uri = Uri.parse('$baseUrl/valuations/$id/valuationresponse/FinalReport').replace(
           queryParameters: {"vehicleNumber": vNo.trim(), "applicantContact": contact.trim()});
-      final response = await http.get(uri).timeout(_defaultTimeout);
+      final response = await apiHttp.get(uri).timeout(_defaultTimeout);
       if (response.statusCode == 200) {
         final body = response.body.trim();
         if (body.isEmpty) return {};
@@ -1328,7 +1481,7 @@ class ApiService {
   // ===========================================================================
   Future<bool> addNote(String valuationId, String noteText) async {
     try {
-      final response = await http.post(Uri.parse('$baseUrl/CommonNote'),
+      final response = await apiHttp.post(Uri.parse('$baseUrl/CommonNote'),
           headers: {"Content-Type": "application/json"},
           body: jsonEncode({
             "entityType": "Valuation",
@@ -1412,7 +1565,7 @@ class ApiService {
         "Remarks": remarks ?? "",
       };
 
-      final response = await http.post(
+      final response = await apiHttp.post(
         uri,
         headers: {"Content-Type": "application/json"},
         body: jsonEncode(body),

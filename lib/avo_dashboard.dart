@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'services/api_service.dart';
+import 'services/brand.dart';
 import 'vehicle_media_page.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
@@ -12,6 +13,10 @@ import 'finalreport_dashboard.dart';
 import 'inspection_field_registry.dart';
 import 'dashboard_common.dart';
 import 'case_history_page.dart';
+import 'case_search_page.dart';
+import 'case_info_bar.dart';
+import 'client_rules.dart';
+import 'date_format.dart';
 
 // =============================================================================
 // VALUATION-TYPE FIELD VISIBILITY MAP (ported from inspection-update.component.ts)
@@ -20,100 +25,88 @@ import 'case_history_page.dart';
 // Keys are internal type ids ('four-wheeler', 'cv', ...). Values are field
 // names that should be shown for that vehicle type. Anything not in the list
 // is hidden. Field names match the WEB PORTAL HTML formControlNames so they
-// align with what the backend expects.
+// align with what the backend expects. Copied from the portal's visibilityMap in
+// inspection-update.component.ts; keep the two identical.
 
 const Map<String, List<String>> _avoVisibilityMap = {
   'four-wheeler': [
-    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
-    'engineCondition', 'chassisCondition', 'steeringSystem', 'brakeSystem', 'suspensionSystem',
-    'fuelSystem', 'tyreCondition', 'bodyCondition', 'cabinCondition', 'exteriorCondition',
-    'interiorCondition', 'gearboxAssembly', 'clutchSystem', 'driveShafts', 'propellerShaft',
-    'differentialAssy', 'radiator', 'interCooler', 'allHosePipes', 'paintWork', 'vinPlate',
-    'vehicleMoved', 'engineStarted', 'roadWorthyCondition', 'otherAccessoryFitment',
-    'parkingBrake', 'abs', 'tailLightsIndicators', 'wiringAssy',
-    'frontCrashGuard', 'rearCrashGuard',
-    'airBags', 'sunRoof', 'sideFenders',
+    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer', 'engineCondition',
+    'chassisCondition', 'steeringSystem', 'brakeSystem', 'suspensionSystem', 'fuelSystem', 'transmissionType',
+    'bodyCondition', 'cabinCondition', 'exteriorCondition', 'interiorCondition', 'gearboxAssembly', 'clutchSystem',
+    'driveShafts', 'propellerShaft', 'differentialAssy', 'radiator', 'interCooler', 'allHosePipes',
+    'paintWork', 'vinPlate', 'roadWorthyCondition', 'otherAccessoryFitment', 'parkingBrake', 'abs',
+    'tailLightsIndicators', 'wiringAssy', 'frontCrashGuard', 'rearCrashGuard', 'airBags', 'sunRoof',
+    'sideFenders', 'headLamps', 'batteryCondition',
   ],
   'cv': [
-    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
-    'engineCondition', 'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricalSystem',
-    'suspensionSystem', 'fuelSystem', 'tyreCondition', 'bodyCondition', 'cabinCondition',
-    'exteriorCondition', 'interiorCondition', 'gearboxAssembly', 'clutchSystem', 'propellerShaft',
-    'differentialAssy', 'radiator', 'interCooler', 'allHosePipes', 'steeringWheel', 'steeringColumn',
-    'steeringBox', 'steeringLinkages', 'bumpers', 'doors', 'mudguards', 'allGlasses', 'dashBoard',
-    'seats', 'upholestry', 'interiorTrims', 'front', 'rear', 'axles', 'airConditioner', 'audio',
-    'paintWork', 'rightSideWing', 'leftSideWing', 'tailGate', 'loadFloor', 'vinPlate',
-    'vehicleMoved', 'engineStarted', 'roadWorthyCondition', 'otherAccessoryFitment',
-    'parkingBrake', 'abs', 'tailLightsIndicators', 'wiringAssy',
-    'frontCrashGuard', 'rearCrashGuard',
-    'hydraulicLift', 'sideUnderRunProtection',
+    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer', 'engineCondition',
+    'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricAssembly', 'suspensionSystem', 'fuelSystem',
+    'transmissionType', 'bodyCondition', 'cabinCondition', 'exteriorCondition', 'interiorCondition', 'gearboxAssembly',
+    'clutchSystem', 'propellerShaft', 'differentialAssy', 'radiator', 'interCooler', 'allHosePipes',
+    'steeringWheel', 'steeringColumn', 'steeringBox', 'steeringLinkages', 'bumpers', 'doors',
+    'mudguards', 'allGlasses', 'dashboard', 'seats', 'upholstery', 'interiorTrims',
+    'front', 'rear', 'axles', 'airConditioner', 'audio', 'paintWork',
+    'rightSideWing', 'leftSideWing', 'tailGate', 'loadFloor', 'vinPlate', 'roadWorthyCondition',
+    'otherAccessoryFitment', 'parkingBrake', 'abs', 'tailLightsIndicators', 'wiringAssy', 'frontCrashGuard',
+    'rearCrashGuard', 'hydraulicLift', 'sideUnderRunProtection', 'headLamps', 'batteryCondition', 'sunRoof',
+    'airBags',
   ],
   'two-wheeler': [
-    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
-    'engineCondition', 'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricalSystem',
-    'suspensionSystem', 'fuelSystem', 'tyreCondition', 'bodyCondition', 'exteriorCondition',
-    'gearboxAssembly', 'clutchSystem', 'steeringHandle', 'frontForkAssy', 'mudguards',
-    'frontFairing', 'rearCowls', 'seats', 'speedoMeter', 'front', 'rear', 'paintWork',
-    'vinPlate', 'vehicleMoved', 'engineStarted', 'roadWorthyCondition', 'otherAccessoryFitment',
-    'mainStand', 'sideStand', 'frontMudGuard', 'rearMudGuard', 'fuelTankCondition',
-    'chainSprocket', 'frontBrakeCondition', 'rearBrakeCondition', 'headLight', 'tailLight',
-    'indicators', 'hornCondition', 'mirrorCondition', 'seatCondition', 'handleBarGrips',
-    'footRest', 'alloyWheelRim',
+    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer', 'engineCondition',
+    'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricAssembly', 'suspensionSystem', 'fuelSystem',
+    'transmissionType', 'bodyCondition', 'exteriorCondition', 'gearboxAssembly', 'clutchSystem', 'steeringHandle',
+    'frontForkAssy', 'mudguards', 'frontFairing', 'rearCowls', 'seats', 'speedoMeter',
+    'front', 'rear', 'paintWork', 'vinPlate', 'roadWorthyCondition', 'otherAccessoryFitment',
+    'mainStand', 'sideStand', 'frontMudGuard', 'rearMudGuard', 'fuelTankCondition', 'chainSprocket',
+    'frontBrakeCondition', 'rearBrakeCondition', 'headLight', 'tailLight', 'indicators', 'hornCondition',
+    'mirrorCondition', 'seatCondition', 'handleBarGrips', 'footRest', 'alloyWheelRim',
   ],
   'three-wheeler': [
-    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
-    'engineCondition', 'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricalSystem',
-    'suspensionSystem', 'fuelSystem', 'tyreCondition', 'bodyCondition', 'cabinCondition',
-    'exteriorCondition', 'interiorCondition', 'gearboxAssembly', 'clutchSystem', 'driveShafts',
-    'radiator', 'interCooler', 'allHosePipes', 'steeringColumn', 'steeringBox', 'steeringLinkages',
-    'steeringHandle', 'frontForkAssy', 'mudguards', 'allGlasses', 'dashBoard', 'seats',
-    'upholestry', 'interiorTrims', 'front', 'rear', 'axles', 'airConditioner', 'audio',
-    'paintWork', 'vinPlate', 'vehicleMoved', 'engineStarted', 'roadWorthyCondition',
-    'otherAccessoryFitment',
-    'parkingBrake', 'abs', 'tailLightsIndicators', 'wiringAssy',
-    'frontCrashGuard', 'rearCrashGuard',
+    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer', 'engineCondition',
+    'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricAssembly', 'suspensionSystem', 'fuelSystem',
+    'transmissionType', 'bodyCondition', 'cabinCondition', 'exteriorCondition', 'interiorCondition', 'gearboxAssembly',
+    'clutchSystem', 'driveShafts', 'radiator', 'interCooler', 'allHosePipes', 'steeringColumn',
+    'steeringBox', 'steeringLinkages', 'steeringHandle', 'frontForkAssy', 'mudguards', 'allGlasses',
+    'dashboard', 'seats', 'upholstery', 'interiorTrims', 'front', 'rear',
+    'axles', 'airConditioner', 'audio', 'paintWork', 'vinPlate', 'roadWorthyCondition',
+    'otherAccessoryFitment', 'parkingBrake', 'abs', 'tailLightsIndicators', 'wiringAssy', 'frontCrashGuard',
+    'rearCrashGuard',
   ],
   'tractor': [
-    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
-    'engineCondition', 'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricalSystem',
-    'suspensionSystem', 'fuelSystem', 'tyreCondition', 'bodyCondition', 'exteriorCondition',
-    'gearboxAssembly', 'clutchSystem', 'differentialAssy', 'radiator', 'interCooler',
-    'allHosePipes', 'steeringWheel', 'steeringColumn', 'steeringBox', 'steeringLinkages',
-    'bonnet', 'bumpers', 'mudguards', 'seats', 'front', 'rear', 'axles', 'paintWork',
-    'vinPlate', 'vehicleMoved', 'engineStarted', 'roadWorthyCondition', 'otherAccessoryFitment',
-    'rightIndividualBrakes', 'leftIndividualBrakes', 'threePointLinkage', 'powerTakeOff',
-    'hitchSystem', 'hydraulicLiftFe', 'frontWeights', 'rearWeights', 'ropsCanopy',
-    'frontTyreCondition', 'rearTyreCondition', 'implementAttachments', 'fuelTankFe',
-    'frontAxleFe', 'rearDrawbar',
+    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer', 'engineCondition',
+    'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricAssembly', 'suspensionSystem', 'fuelSystem',
+    'transmissionType', 'bodyCondition', 'exteriorCondition', 'gearboxAssembly', 'clutchSystem', 'differentialAssy',
+    'radiator', 'interCooler', 'allHosePipes', 'steeringWheel', 'steeringColumn', 'steeringBox',
+    'steeringLinkages', 'bonnet', 'bumpers', 'mudguards', 'seats', 'front',
+    'rear', 'axles', 'paintWork', 'vinPlate', 'roadWorthyCondition', 'otherAccessoryFitment',
+    'rightIndividualBrakes', 'leftIndividualBrakes', 'threePointLinkage', 'powerTakeOff', 'hitchSystem', 'hydraulicLiftFe',
+    'frontWeights', 'rearWeights', 'ropsCanopy', 'frontTyreCondition', 'rearTyreCondition', 'implementAttachments',
+    'fuelTankFe', 'frontAxleFe', 'rearDrawbar',
   ],
   'ce': [
-    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
-    'engineCondition', 'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricalSystem',
-    'suspensionSystem', 'fuelSystem', 'tyreCondition', 'bodyCondition', 'cabinCondition',
-    'exteriorCondition', 'interiorCondition', 'gearboxAssembly', 'clutchSystem', 'radiator',
-    'interCooler', 'allHosePipes', 'steeringWheel', 'steeringColumn', 'steeringBox',
-    'steeringLinkages', 'bonnet', 'mudguards', 'allGlasses', 'boom', 'bucket', 'chainTrack',
-    'hydraulicCylinders', 'swingUnit', 'dashBoard', 'seats', 'upholestry', 'interiorTrims',
-    'front', 'rear', 'axles', 'airConditioner', 'paintWork', 'vinPlate', 'vehicleMoved',
-    'engineStarted', 'roadWorthyCondition', 'otherAccessoryFitment',
-    'retarder', 'differentialLock', 'pto', 'hydraulicSystem', 'boomArm', 'bucketCondition',
-    'bladeCondition', 'liftingCapacity', 'tyreConditionCe', 'underCarriage', 'crawlerTracks',
-    'steelRims', 'attachmentCondition', 'cabCondition', 'counterWeight', 'rockBreaker',
+    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer', 'engineCondition',
+    'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricAssembly', 'suspensionSystem', 'fuelSystem',
+    'transmissionType', 'bodyCondition', 'cabinCondition', 'exteriorCondition', 'interiorCondition', 'gearboxAssembly',
+    'clutchSystem', 'radiator', 'interCooler', 'allHosePipes', 'steeringWheel', 'steeringColumn',
+    'steeringBox', 'steeringLinkages', 'bonnet', 'mudguards', 'allGlasses', 'boom',
+    'bucket', 'chainTrack', 'hydraulicCylinders', 'swingUnit', 'dashboard', 'seats',
+    'upholstery', 'interiorTrims', 'front', 'rear', 'axles', 'airConditioner',
+    'paintWork', 'vinPlate', 'roadWorthyCondition', 'otherAccessoryFitment', 'retarder', 'differentialLock',
+    'pto', 'hydraulicSystem', 'boomArm', 'bucketCondition', 'bladeCondition', 'liftingCapacity',
+    'tyreConditionCe', 'underCarriage', 'crawlerTracks', 'steelRims', 'attachmentCondition', 'cabCondition',
+    'counterWeight', 'rockBreaker',
   ],
   'bus': [
-    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer',
-    'engineCondition', 'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricalSystem',
-    'suspensionSystem', 'fuelSystem', 'tyreCondition', 'bodyCondition', 'cabinCondition',
-    'exteriorCondition', 'interiorCondition', 'gearboxAssembly', 'clutchSystem', 'propellerShaft',
-    'differentialAssy', 'radiator', 'interCooler', 'allHosePipes', 'steeringWheel', 'steeringColumn',
-    'steeringBox', 'steeringLinkages', 'bumpers', 'doors', 'mudguards', 'allGlasses', 'dashBoard',
-    'seats', 'upholestry', 'interiorTrims', 'front', 'rear', 'axles', 'airConditioner', 'audio',
-    'paintWork', 'vinPlate', 'vehicleMoved', 'engineStarted', 'roadWorthyCondition',
-    'otherAccessoryFitment',
-    'parkingBrake', 'abs', 'tailLightsIndicators', 'wiringAssy',
-    'frontCrashGuard', 'rearCrashGuard',
-    'coachCondition', 'passengerSeats', 'emergencyExits', 'luggageCompartment',
-    'acSystem', 'destinationBoard', 'sideMirrors',
+    'vehicleInspectedBy', 'inspectionDate', 'inspectionLocation', 'frontPhoto', 'odometer', 'engineCondition',
+    'chassisCondition', 'steeringSystem', 'brakeSystem', 'electricAssembly', 'suspensionSystem', 'fuelSystem',
+    'transmissionType', 'bodyCondition', 'cabinCondition', 'exteriorCondition', 'interiorCondition', 'gearboxAssembly',
+    'clutchSystem', 'propellerShaft', 'differentialAssy', 'radiator', 'interCooler', 'allHosePipes',
+    'steeringWheel', 'steeringColumn', 'steeringBox', 'steeringLinkages', 'bumpers', 'doors',
+    'mudguards', 'allGlasses', 'dashboard', 'seats', 'upholstery', 'interiorTrims',
+    'front', 'rear', 'axles', 'airConditioner', 'audio', 'paintWork',
+    'vinPlate', 'roadWorthyCondition', 'otherAccessoryFitment', 'parkingBrake', 'abs', 'tailLightsIndicators',
+    'wiringAssy', 'frontCrashGuard', 'rearCrashGuard', 'coachCondition', 'passengerSeats', 'emergencyExits',
+    'luggageCompartment', 'acSystem', 'destinationBoard', 'sideMirrors',
   ],
 };
 
@@ -224,12 +217,14 @@ class _AvoDashboardState extends State<AvoDashboard> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("Vehga AVO",
-                style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
+            Text("${Brand.profile.name} AVO",
+                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
             Text("Hello, ${widget.userName}", style: const TextStyle(color: Colors.grey, fontSize: 12)),
           ],
         ),
         actions: [
+          IconButton(icon: const Icon(Icons.search, color: Colors.black), tooltip: "Search cases",
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CaseSearchPage()))),
           IconButton(icon: const Icon(Icons.refresh, color: Colors.black), onPressed: _loadDashboardData),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.red),
@@ -424,7 +419,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   Map<String, dynamic> _avoData = {};
   Map<String, dynamic> _stakeholderData = {};
   Map<String, dynamic> _backendData = {};
-  Map<String, dynamic> _paymentData = {};
   Map<String, dynamic> _workflowTable = {};
 
   List<dynamic> _notes = [];
@@ -434,6 +428,9 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
 
   // valuationType — used for showField visibility map
   String? _valuationTypeKey; // 'four-wheeler' / 'cv' / 'two-wheeler' / 'three-wheeler' / 'tractor' / 'ce'
+
+  /// TVS Credit's report adds an Additional Details box, so its AVO answers more.
+  bool get _isTvs => isTvsCredit(_selectedStakeholderName ?? _stkNameController.text);
 
   // Registry-driven field values: fieldKey → 'GOOD'/'AVERAGE'/'POOR'/'YES'/'NO'/''
   Map<String, String> _registryValues = {};
@@ -450,20 +447,8 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     "FinalReport — +919885855567"
   ];
 
-  final List<String> _stakeholderList = [
-    "State Bank of India (SBI)", "HDFC Bank", "ICICI Bank", "Axis Bank", "IndusInd Bank",
-    "Punjab National Bank (PNB)", "Federal Bank", "Union Bank of India", "Bank of Baroda",
-    "IDFC FIRST Bank", "Karur Vysya Bank", "Kotak Mahindra Bank", "Mahindra Finance",
-    "Bajaj Finserv", "Hero FinCorp", "TVS Credit Services", "Shriram Finance",
-    "Muthoot Capital Services", "Cholamandalam Investment and Finance Company",
-    "Sundaram Finance", "Manappuram Finance", "L&T Finance"
-  ];
   final List<String> _valuationTypes = valuationTypeOptions;
   final List<String> _fuelTypes = ["Petrol", "Diesel", "CNG", "Electric", "Hybrid", "LPG"];
-
-  // Payment dropdown options
-  final List<String> _paymentStatuses = ["Pending", "Completed", "Failed"];
-  final List<String> _paymentMethods = ["Online", "Cash", "Card", "UPI"];
 
   List<dynamic> _pincodeLocations = [];
   List<String> _locationNames = [];
@@ -471,9 +456,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   String? _selectedStakeholderName;
   String? _selectedValuationType;
   String? _selectedFuel;
-
-  String? _selectedPaymentStatus;
-  String? _selectedPaymentMethod;
 
   String? _rcPath;
   String? _insPath;
@@ -518,6 +500,11 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   final _bodyTypeController = TextEditingController();             // free text
   final _overallTyreConditionController = TextEditingController(); // dropdown: Good/Not Good (but stores as bool string)
   final _otherAccessoryFitmentController = TextEditingController();// bool: Yes/No
+  // Printed on every report cover, so asked on every case and never defaulted.
+  final _accidentalController = TextEditingController();          // bool: Yes/No
+  // TVS Credit cases only: page 3's Additional Details box prints it.
+  final _seizedController = TextEditingController();              // bool: Yes/No
+  String? _transmissionType;                                       // transmissionOptions
 
   // External Visual Checks
   final _windshieldGlassController = TextEditingController();      // free text
@@ -673,11 +660,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   final _remarksController = TextEditingController();
   final _noteController = TextEditingController();
 
-  // Payment controllers
-  final _paymentReferenceController = TextEditingController();
-  final _paymentDateController = TextEditingController();
-  final _paymentAmountController = TextEditingController(text: '800');
-
   // Backend vehicle controllers (unchanged)
   final _regNoController = TextEditingController();
   final _makeController = TextEditingController();
@@ -749,7 +731,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       var stk = await api.getValuationDetails(id, vNo, contact);
       var bck = await api.getBackendVehicleDetails(id, vNo, contact);
       var notes = await api.getNotes(id);
-      var payment = await api.getPayment(id);
       var workflowTable = await api.getWorkflowTable(id, vNo, contact);
 
       if (mounted) {
@@ -758,7 +739,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
           _stakeholderData = stk;
           _backendData = bck;
           _notes = notes;
-          _paymentData = payment;
           _workflowTable = workflowTable;
 
           Map<String, dynamic> merged = {};
@@ -779,7 +759,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
           _populateStakeholderFields(merged);
           _populateAVOFields(_avoData.isNotEmpty ? _avoData : merged);
           _populateBackendFields(_backendData);
-          _populatePaymentFields(_paymentData);
           _checkReturnStatus(_workflowTable);
 
           if (_stkPinController.text.length == 6) _fetchLocationsForPincode(_stkPinController.text);
@@ -891,7 +870,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
 
   void _populateStakeholderFields(Map<String, dynamic> data) {
     String stkName = _getUniversalValue(data, ['stakeholderName', 'name', 'BankName', 'Name']);
-    if (_stakeholderList.contains(stkName)) _selectedStakeholderName = stkName;
+    if (stakeholderOptions.contains(stkName)) _selectedStakeholderName = stkName;
     _stkNameController.text = stkName;
 
     _stkExecController.text = _getUniversalValue(data, ['executiveName', 'Executive', 'ExecutiveName']);
@@ -943,6 +922,10 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
 
     // Bool fields
     _vinPlateController.text = _toBoolStr(_getUniversalValue(data, ['vinPlate']));
+    _accidentalController.text = _toBoolStr(_getUniversalValue(data, ['accidental']));
+    _seizedController.text = _toBoolStr(_getUniversalValue(data, ['seizedByOtherFinancier']));
+    final transmission = _getUniversalValue(data, ['transmissionType']).trim().toUpperCase();
+    _transmissionType = transmissionOptions.contains(transmission) ? transmission : null;
     _otherAccessoryFitmentController.text = _toBoolStr(_getUniversalValue(data, ['otherAccessoryFitment']));
     _roadWorthyConditionController.text = _toBoolStr(_getUniversalValue(data, ['roadWorthyCondition']));
 
@@ -1123,20 +1106,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     }
   }
 
-  void _populatePaymentFields(Map<String, dynamic> data) {
-    String pStatus = _getUniversalValue(data, ['paymentStatus']);
-    _selectedPaymentStatus = _paymentStatuses.contains(pStatus) ? pStatus : 'Pending';
-
-    String pMethod = _getUniversalValue(data, ['paymentMethod']);
-    _selectedPaymentMethod = _paymentMethods.contains(pMethod) ? pMethod : 'Online';
-
-    _paymentReferenceController.text = _getUniversalValue(data, ['paymentReference']);
-    _paymentDateController.text = _fmtDate(_getUniversalValue(data, ['paymentDate']));
-
-    String pAmount = _getUniversalValue(data, ['paymentAmount']);
-    _paymentAmountController.text = pAmount.isNotEmpty ? pAmount : '800';
-  }
-
   void _checkReturnStatus(Map<String, dynamic> table) {
     if (table.isEmpty) {
       _returnedBy = null;
@@ -1258,12 +1227,17 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     String id = widget.summaryData['valuationId']?.toString() ??
         widget.summaryData['id']?.toString() ?? "";
 
-    String vNo = _vehNoController.text.trim();
-    if (vNo.isEmpty) vNo = _getUniversalValue(d, ['VehicleNumber', 'vehicleNumber', 'registrationNumber']);
+    // The case is keyed on the vehicle number and contact it was registered
+    // under. The stakeholder tab can edit both, so they must never become the
+    // key, or a save lands on another case.
+    String vNo = _getUniversalValue(widget.summaryData, ['vehicleNumber', 'VehicleNumber']);
+    if (vNo.isEmpty) vNo = _getUniversalValue(d, ['VehicleNumber', 'vehicleNumber']);
+    if (vNo.isEmpty) vNo = _vehNoController.text.trim();
     if (vNo.isEmpty) vNo = "UNKNOWN";
 
-    String contact = _appContactController.text.trim();
+    String contact = _getUniversalValue(widget.summaryData, ['applicantContact', 'ApplicantContact']);
     if (contact.isEmpty) contact = _getUniversalValue(d, ['ApplicantContact', 'applicantContact']);
+    if (contact.isEmpty) contact = _appContactController.text.trim();
     if (contact.isEmpty) contact = "0000000000";
 
     return {"id": id, "vNo": vNo, "contact": contact};
@@ -1285,6 +1259,9 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       // vehicleMoved / engineStarted are registry fields now (FUNCTIONALITY) and go out
       // with _registryValues below as YES / NO.
       "vinPlate": _vinPlateController.text,
+      "accidental": _accidentalController.text,
+      "seizedByOtherFinancier": _seizedController.text,
+      "transmissionType": _transmissionType ?? "",
       "otherAccessoryFitment": _otherAccessoryFitmentController.text,
       "roadWorthyCondition": _roadWorthyConditionController.text,
       // Number
@@ -1325,7 +1302,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       "intercooler": _intercoolerController.text,
       "allHosePipes": _allHosePipesController.text,
       // Pseudo-bool fields (UI dropdown, sent as "true"/"false")
-      "overallTyreCondition": _overallTyreConditionController.text,
       "engineCondition": _engineConditionController.text,
       "suspensionSystem": _suspensionSystemController.text,
       "steeringSystem": _steeringSystemController.text,
@@ -1440,48 +1416,65 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     return key[0].toUpperCase() + key.substring(1);
   }
 
-  Future<Map<String, dynamic>> _savePayment(Map<String, String> ctx) async {
-    final paymentAmount = num.tryParse(_paymentAmountController.text) ?? 0;
-    final dateText = _paymentDateController.text;
-    final paymentDateIso = dateText.isEmpty
-        ? DateTime.now().toUtc().toIso8601String()
-        : (DateTime.tryParse(dateText) ?? DateTime.now()).toUtc().toIso8601String();
-
-    return api.savePayment(
-      valuationId: ctx["id"]!,
-      vehicleNumber: ctx["vNo"]!,
-      applicantContact: ctx["contact"]!,
-      paymentStatus: _selectedPaymentStatus ?? 'Pending',
-      paymentReference: _paymentReferenceController.text.isEmpty ? null : _paymentReferenceController.text,
-      paymentDate: paymentDateIso,
-      paymentMethod: _selectedPaymentMethod ?? 'Online',
-      paymentAmount: paymentAmount,
-    );
-  }
-
   // ===========================================================================
   // SAVE / SUBMIT / RETURN flows (unchanged from previous version)
   // ===========================================================================
 
-  Future<void> _onSave() async {
-    // Validate required AVO fields
-    if (_avoFormKey.currentState != null && !_avoFormKey.currentState!.validate()) {
-      _showError("Please fill all required fields (*)");
-      return;
+  /// What still blocks a save, by name, as the portal's reportInvalidForm says it.
+  /// Checked by hand because fields inside a closed section never run their
+  /// validators.
+  List<String> _avoProblems() {
+    final missing = <String>[];
+    if (_vehicleInspectedByController.text.trim().isEmpty) missing.add("Vehicle Inspected By");
+    if (_dateOfInspectionController.text.trim().isEmpty) missing.add("Date of Inspection");
+    if (_inspectionLocationController.text.trim().isEmpty) missing.add("Inspection Location");
+    if (_showField('odometer') && _odometerController.text.trim().isEmpty) missing.add("Odometer");
+    if (_accidentalController.text.isEmpty) missing.add("Accident Status");
+    if (_isTvs && _showField('vinPlate') && _vinPlateController.text.isEmpty) missing.add("VIN Plate Present");
+    if (_isTvs && _seizedController.text.isEmpty) missing.add("Is the Vehicle Seized by Other Financier");
+
+    final problems = <String>[];
+    if (missing.isNotEmpty) problems.add("Required: ${missing.join(', ')}");
+    final odo = num.tryParse(_odometerController.text.trim());
+    if (_odometerController.text.trim().isNotEmpty && (odo == null || odo < 1)) {
+      problems.add("Odometer: enter the reading shown on the dial — 0 km is not a valid reading");
     }
+    final date = DateTime.tryParse(_dateOfInspectionController.text.trim());
+    if (date != null && date.isAfter(DateTime.now())) problems.add("Date of Inspection cannot be in the future");
+    return problems;
+  }
+
+  bool _checkAvoForm() {
+    final problems = _avoProblems();
+    if (problems.isEmpty) return true;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(problems.join("\n")),
+      backgroundColor: Colors.red,
+      duration: const Duration(seconds: 6),
+    ));
+    return false;
+  }
+
+  /// The AVO stage's holder, recorded on save and submit as the portal does.
+  Map<String, String> _avoHolder() {
+    final name = _assigneeNameForUser();
+    return {
+      "avoAssignedTo": name,
+      "avoAssignedToPhoneNumber": currentUserPhone,
+      "avoAssignedToWhatsapp": currentUserPhone,
+    };
+  }
+
+  Future<void> _onSave() async {
+    if (!_checkAvoForm()) return;
 
     setState(() => _isSaving = true);
     final ctx = _getSafeContext();
     final assignee = _assigneeNameForUser();
 
-    // Portal parity: mandatory photos + vehicle video must exist before the
-    // inspection can be saved ("Cannot save inspection!" in the web portal).
-    final photosOk = await _ensureMandatoryPhotos(ctx);
-    if (!photosOk) {
-      if (mounted) setState(() => _isSaving = false);
-      return;
-    }
-
+    // Persist the typed details BEFORE checking photos, as the portal now does:
+    // missing photos should stop the case moving on, not cost the inspector
+    // everything they entered.
     final inspRes = await api.saveInspectionForAvo(
       id: ctx["id"]!,
       vNo: ctx["vNo"]!,
@@ -1492,50 +1485,49 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     if (!mounted) return;
     if (inspRes['success'] != true) {
       setState(() => _isSaving = false);
-      _showError("Save failed: ${inspRes['message']}");
+      _showError("Failed to save inspection details: ${inspRes['message']}");
       return;
     }
 
-    final payRes = await _savePayment(ctx);
-    if (!mounted) return;
-    if (payRes['success'] != true) {
-      setState(() => _isSaving = false);
-      _showError("Payment save failed: ${payRes['message']}");
+    final photosOk = await _ensureMandatoryPhotos(ctx, detailsSaved: true);
+    if (!photosOk) {
+      if (mounted) setState(() => _isSaving = false);
       return;
     }
 
-    final startRes = await api.startWorkflow(ctx["id"]!, 3, ctx["vNo"]!, ctx["contact"]!);
+    await api.updateWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!, {
+      "workflow": "AVO",
+      "workflowStepOrder": 3,
+      "assignedTo": assignee,
+      "assignedToPhoneNumber": currentUserPhone,
+      "assignedToWhatsapp": currentUserPhone,
+      ..._avoHolder(),
+    });
+    await api.addWorkflowHistory(
+      valuationId: ctx["id"]!,
+      action: "Inspection Details Saved - AVO",
+      remarks: "Inspection details saved",
+      performedByUserId: currentUserId,
+      performedByUserName: currentUserName,
+      statusTo: "AVO",
+    );
     if (!mounted) return;
-    if (startRes['success'] != true) {
-      debugPrint("DEBUG: startWorkflow(3) on save failed (likely already started): ${startRes['message']}");
-    }
-
-    final tableRes = await api.updateWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
-        {"workflow": "AVO", "workflowStepOrder": 3, "assignedTo": assignee, "avoAssignedTo": assignee});
-    if (!mounted) return;
-    if (tableRes['success'] != true) {
-      debugPrint("DEBUG: updateWorkflowTable on save failed: ${tableRes['message']}");
-    }
 
     await _loadAllData();
     setState(() {
       _isSaving = false;
       _isAvoEditing = false;
     });
-    _showSuccess("Saved successfully");
+    _showSuccess("Inspection saved successfully");
   }
 
   Future<void> _onSubmit() async {
-    if (_avoFormKey.currentState != null && !_avoFormKey.currentState!.validate()) {
-      _showError("Please fill all required fields (*)");
-      return;
-    }
+    if (!_checkAvoForm()) return;
 
     setState(() => _isSubmitting = true);
     final ctx = _getSafeContext();
     final assignee = _assigneeNameForUser();
 
-    // Portal parity: mandatory photos + vehicle video gate the submit too.
     final photosOk = await _ensureMandatoryPhotos(ctx);
     if (!photosOk) {
       if (mounted) setState(() => _isSubmitting = false);
@@ -1548,26 +1540,15 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
     if (!mounted) return;
     if (inspRes['success'] != true) {
       setState(() => _isSubmitting = false);
-      _showError("Submit failed at inspection step: ${inspRes['message']}");
+      _showError("Submit failed: ${inspRes['message']}");
       return;
     }
 
-    final payRes = await _savePayment(ctx);
-    if (!mounted) return;
-    if (payRes['success'] != true) {
-      setState(() => _isSubmitting = false);
-      _showError("Submit failed at payment step: ${payRes['message']}");
-      return;
-    }
-
-    final completeRes = await api.completeWorkflow(ctx["id"]!, 3, ctx["vNo"]!, ctx["contact"]!);
-    if (!mounted) return;
-    if (completeRes['success'] != true) {
-      setState(() => _isSubmitting = false);
-      _showError("Submit failed: could not complete AVO step. ${completeRes['message']}");
-      return;
-    }
-
+    // Portal order. Starting and completing AVO tolerate "already done"; starting
+    // QC must succeed. The market range is no longer requested here: completing
+    // step 3 warms it on the server, and the approval page asks for it itself.
+    await api.startWorkflow(ctx["id"]!, 3, ctx["vNo"]!, ctx["contact"]!);
+    await api.completeWorkflow(ctx["id"]!, 3, ctx["vNo"]!, ctx["contact"]!);
     final startQcRes = await api.startWorkflow(ctx["id"]!, 4, ctx["vNo"]!, ctx["contact"]!);
     if (!mounted) return;
     if (startQcRes['success'] != true) {
@@ -1576,26 +1557,12 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       return;
     }
 
-    // AI valuation is best-effort — a failure should not block submission.
-    // If the GPT call times out or the backend errors, we log a warning and
-    // continue; the QC user can still manually enter valuation figures.
-    final aiRes = await api.getValuationDetailsfromAI(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
-    if (!mounted) return;
-    if (aiRes['success'] != true) {
-      debugPrint("WARN: AI valuation step failed (non-blocking): ${aiRes['message']}");
-    }
-
-    final tableRes = await api.updateWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
-        {"workflow": "QC", "workflowStepOrder": 4, "assignedTo": assignee, "avoAssignedTo": assignee});
-    if (!mounted) return;
-    if (tableRes['success'] != true) {
-      debugPrint("WARN: updateWorkflowTable failed after Submit: ${tableRes['message']}");
-    }
-
+    await api.updateWorkflowTable(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!,
+        {"workflow": "QC", "workflowStepOrder": 4, ..._avoHolder()});
     await api.addWorkflowHistory(
       valuationId: ctx["id"]!,
-      action: "AVO Inspection Submitted",
-      remarks: "Inspection completed, sent to QC",
+      action: "Inspection Submitted - Moving to QC",
+      remarks: "Inspection completed. Status: AVO Complete \u2192 QC In Progress",
       performedByUserId: currentUserId,
       performedByUserName: currentUserName,
       statusFrom: "AVO",
@@ -1748,7 +1715,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   /// Runs the backend mandatory-media check (photos + vehicle video), showing
   /// the missing-items dialog when incomplete. Returns true when save/submit
   /// may proceed. Mirrors the portal's checkMandatoryPhotosBeforeSave().
-  Future<bool> _ensureMandatoryPhotos(Map<String, String> ctx) async {
+  Future<bool> _ensureMandatoryPhotos(Map<String, String> ctx, {bool detailsSaved = false}) async {
     final photoCheck = await api.checkMandatoryPhotos(ctx["id"]!, ctx["vNo"]!, ctx["contact"]!);
     if (!mounted) return false;
 
@@ -1760,14 +1727,14 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
 
     final missing = (photoCheck['missingPhotos'] as List?)?.cast<String>() ?? [];
     if (missing.isNotEmpty) {
-      await _showMissingPhotosDialog(missing);
+      await _showMissingPhotosDialog(missing, detailsSaved: detailsSaved);
     } else {
       _showError(photoCheck['error']?.toString() ?? "Photo validation failed. Please try again.");
     }
     return false;
   }
 
-  Future<void> _showMissingPhotosDialog(List<String> missing) async {
+  Future<void> _showMissingPhotosDialog(List<String> missing, {bool detailsSaved = false}) async {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1782,6 +1749,12 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (detailsSaved)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Text("Your inspection details are saved. Upload these before submitting:",
+                      style: TextStyle(color: Colors.green)),
+                ),
               Text("${missing.length} mandatory item(s) missing:",
                   style: const TextStyle(fontWeight: FontWeight.w500)),
               const SizedBox(height: 8),
@@ -1821,6 +1794,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   }
 
   String _assigneeNameForUser() {
+    if (currentUserName.isNotEmpty) return currentUserName;
     final user = FirebaseAuth.instance.currentUser;
     return user?.displayName ?? user?.email?.split('@').first ?? user?.phoneNumber ?? 'AVO Inspector';
   }
@@ -2022,6 +1996,12 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
               child: Column(
                 children: [
                   _buildHeaderCard(),
+                  const SizedBox(height: 12),
+                  CaseInfoBar(
+                    valuationId: _getSafeContext()["id"]!,
+                    vehicleNumber: _getSafeContext()["vNo"]!,
+                    applicantContact: _getSafeContext()["contact"]!,
+                  ),
                   if (_currentTab == "AVO" && _returnedBy != null) ...[
                     const SizedBox(height: 12),
                     _buildReturnBanner(),
@@ -2204,7 +2184,7 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       ),
       _buildSectionContainer("Stakeholder", [
         if (canEdit)
-          _buildDropdown("Name of Stakeholder", _stakeholderList, _selectedStakeholderName,
+          _buildDropdown("Name of Stakeholder", stakeholderOptions, _selectedStakeholderName,
               (val) => setState(() => _selectedStakeholderName = val), isMandatory: true)
         else
           _buildField("Name of Stakeholder", _stkNameController.text, _stkNameController,
@@ -2626,9 +2606,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
       return _buildBoolDropdown(label, c, trueLabel: t, falseLabel: f, isEditable: canEdit, isMandatory: req);
     }
 
-    // Returns true if at least one field key in the list is visible for the current vehicle type.
-    // Used to hide entire section containers when no fields inside them are relevant.
-    bool hv(List<String> keys) => keys.any((k) => _showField(k));
 
     return Form(
       key: _avoFormKey,
@@ -2643,16 +2620,31 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
 
         // ── 2. GENERAL CONDITION ────────────────────────────────────────────
         // Vehicle Moved and Engine Started are asked under FUNCTIONALITY, from the registry.
-        if (hv(['odometer', 'vinPlate', 'bodyType',
-                 'tyreCondition', 'otherAccessoryFitment', 'roadWorthyCondition']))
-          _buildSectionContainer("General Condition", [
-            tf("Odometer (km)", "odometer", _odometerController, kb: TextInputType.number),
-            bd("VIN Plate Present", "vinPlate", _vinPlateController),
-            tf("Body Type", "bodyType", _bodyTypeController),
-            bd("Overall Tyre Condition", "tyreCondition", _overallTyreConditionController, t: "Good", f: "Not Good"),
-            bd("Other Accessories Fitted", "otherAccessoryFitment", _otherAccessoryFitmentController),
-            bd("Road Worthy Condition", "roadWorthyCondition", _roadWorthyConditionController, t: "OK", f: "Not OK"),
-          ]),
+        // Accident Status is asked on every case, so the section always shows.
+        _buildSectionContainer("General Condition", [
+          tf("Odometer (km)", "odometer", _odometerController, required: true, kb: TextInputType.number),
+          bd("VIN Plate Present", "vinPlate", _vinPlateController, req: _isTvs),
+          // TVS Credit's page 3 turns a No into a sentence, so say what it will print.
+          if (_isTvs && _showField('vinPlate') && _vinPlateController.text == "false")
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text("Added to report remarks: $vinPlateMissingText",
+                  style: const TextStyle(fontSize: 12, color: Colors.orange)),
+            ),
+          _buildBoolDropdown("Accident Status", _accidentalController, isEditable: canEdit, isMandatory: true),
+          // Only TVS Credit's report asks this, so only its cases do.
+          if (_isTvs)
+            _buildBoolDropdown("Is the Vehicle Seized by Other Financier", _seizedController,
+                isEditable: canEdit, isMandatory: true),
+          tf("Body Type", "bodyType", _bodyTypeController),
+          if (_showField('transmissionType'))
+            canEdit
+                ? _buildDropdown("Transmission Type", transmissionOptions, _transmissionType,
+                    (v) => setState(() => _transmissionType = v))
+                : _buildField("Transmission Type", _transmissionType ?? '', null, isEditable: false),
+          bd("Other Accessories Fitted", "otherAccessoryFitment", _otherAccessoryFitmentController),
+          bd("Road Worthy Condition", "roadWorthyCondition", _roadWorthyConditionController, t: "OK", f: "Not OK"),
+        ]),
 
         // ── SYSTEM INSPECTION — registry-driven per vehicle type ─────────────
         ...[
@@ -2664,23 +2656,6 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
         ],
 
         // ── PAYMENT & REMARKS ───────────────────────────────────────────────
-        _buildSectionContainer("Payment Collection", [
-          if (canEdit)
-            _buildDropdown("Payment Status", _paymentStatuses, _selectedPaymentStatus,
-                (val) => setState(() => _selectedPaymentStatus = val), isMandatory: true)
-          else
-            _buildField("Payment Status", _selectedPaymentStatus ?? '', null, isEditable: false, isRequired: true),
-          _buildField("Payment Reference", _paymentReferenceController.text, _paymentReferenceController, isEditable: canEdit),
-          _buildDateField("Payment Date", _paymentDateController, canEdit, required: true),
-          if (canEdit)
-            _buildDropdown("Payment Method", _paymentMethods, _selectedPaymentMethod,
-                (val) => setState(() => _selectedPaymentMethod = val), isMandatory: true)
-          else
-            _buildField("Payment Method", _selectedPaymentMethod ?? '', null, isEditable: false, isRequired: true),
-          _buildField("Payment Amount", _paymentAmountController.text, _paymentAmountController,
-              isEditable: canEdit, isRequired: true, keyboardType: TextInputType.number),
-        ]),
-
         _buildSectionContainer("Remarks", [
           TextField(
               controller: _remarksController,
@@ -2719,6 +2694,12 @@ class _InspectionFormPageState extends State<InspectionFormPage> {
   }
 
   Widget _buildDateField(String label, TextEditingController controller, bool isEditable, {bool required = false}) {
+    // Viewed day-first, as the portal shows every date. The field itself keeps
+    // yyyy-MM-dd, which is what is saved.
+    if (!isEditable) {
+      final shown = formatDdMmYyyy(controller.text);
+      return _buildField(label, shown.isEmpty ? controller.text : shown, null, isEditable: false, isRequired: required);
+    }
     return GestureDetector(
         onTap: isEditable ? () => _selectDate(controller) : null,
         child: AbsorbPointer(

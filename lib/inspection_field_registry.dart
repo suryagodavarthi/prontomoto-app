@@ -10,17 +10,32 @@ enum FieldType { condition, yesNo, text, date, number }
 
 enum VehicleTypeKey { cv, fw, tw, thrw, ce, bus, fe }
 
+/// How a field's answer turns into points (see answerPoints in inspection_score.dart).
+/// - condition (the default): GOOD 8.5, AVERAGE 5.5 … NO 1.0.
+/// - noIsGood: the question asks about a fault, so NO is the good answer —
+///   Fluid Leaks and Warning Lights On: NO scores 8.5 and YES scores 1.0.
+/// - zeroIsGood: a count of faults — Missing Tyres: 0 scores 8.5, 1 or more 1.0.
+enum FieldScoring { condition, noIsGood, zeroIsGood }
+
 class InspectionField {
   final String key;
   final String label;
   final FieldType type;
   final String? defaultValue;
+  final FieldScoring scoring;
+
+  /// Whether this field counts towards its section's score. False for facts
+  /// about the vehicle rather than judgements of its condition (ABS fitted,
+  /// number of tyres). Keep in sync with FieldDef.Scored in ProntoPDFGeneration.
+  final bool scored;
 
   const InspectionField({
     required this.key,
     required this.label,
     required this.type,
     this.defaultValue,
+    this.scoring = FieldScoring.condition,
+    this.scored = true,
   });
 }
 
@@ -28,7 +43,10 @@ class InspectionSection {
   final String section;
   final List<InspectionField> fields;
 
-  const InspectionSection({required this.section, required this.fields});
+  /// Whether this section counts towards the overall vehicle score.
+  final bool scored;
+
+  const InspectionSection({required this.section, required this.fields, this.scored = true});
 }
 
 // Keep in sync with CONDITION_OPTIONS in prontofirebase's
@@ -44,6 +62,11 @@ const List<String> conditionOptions = [
   'NO',
 ];
 const List<String> yesNoOptions = ['YES', 'NO'];
+
+/// Gearbox type, recorded by the AVO in General Condition. VAHAN does not return
+/// this, so it is observed rather than looked up. Keep in sync with
+/// TRANSMISSION_OPTIONS in the portal.
+const List<String> transmissionOptions = ['MANUAL', 'AUTOMATIC', 'AMT', 'CVT', 'DCT'];
 
 // ─── Categories ────────────────────────────────────────────────────────────
 // The four systems the report's cover rates. A VIEW over the sections below, not
@@ -144,7 +167,7 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
   VehicleTypeKey.cv: [
     InspectionSection(section: 'ENGINE CONDITION', fields: [
       InspectionField(key: 'engineCondition', label: 'Engine Condition', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO'),
+      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
       InspectionField(key: 'radiator', label: 'Radiator', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'allHosePipes', label: 'All Hose Pipes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'fuelSystem', label: 'Fuel System', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -158,7 +181,7 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
       InspectionField(key: 'frontBrakes', label: 'Front Brakes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'rearBrakes', label: 'Rear Brakes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'parkingBrake', label: 'Parking Brake', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'abs', label: 'ABS', type: FieldType.condition, defaultValue: 'YES'),
+      InspectionField(key: 'abs', label: 'ABS', type: FieldType.condition, defaultValue: 'YES', scored: false),
     ]),
     InspectionSection(section: 'STEERING SYSTEM', fields: [
       InspectionField(key: 'steeringWheel', label: 'Steering Wheel', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -195,16 +218,16 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
     ]),
     InspectionSection(section: 'TIRES', fields: [
       InspectionField(key: 'tyreCondition', label: 'Tyre Condition', type: FieldType.condition, defaultValue: 'AVERAGE'),
-      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number),
-      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0'),
+      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number, scored: false),
+      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0', scoring: FieldScoring.zeroIsGood),
     ]),
     InspectionSection(section: 'FUNCTIONALITY', fields: [
       InspectionField(key: 'engineStarted', label: 'Engine Started', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'testDrive', label: 'Test Drive', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'vehicleMoved', label: 'Vehicle Moved', type: FieldType.condition, defaultValue: 'YES'),
-      InspectionField(key: 'warningLights', label: 'Warning Lights', type: FieldType.condition, defaultValue: 'YES'),
+      InspectionField(key: 'warningLights', label: 'Warning Lights On', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
     ]),
-    InspectionSection(section: 'OTHER SYSTEMS', fields: [
+    InspectionSection(section: 'OTHER SYSTEMS', scored: false, fields: [
       InspectionField(key: 'audio', label: 'Audio', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'upholstery', label: 'Upholstery', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'hydraulicLift', label: 'Hydraulic Lift', type: FieldType.condition, defaultValue: 'YES'),
@@ -220,7 +243,7 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
   VehicleTypeKey.fw: [
     InspectionSection(section: 'ENGINE CONDITION', fields: [
       InspectionField(key: 'engineCondition', label: 'Engine Condition', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO'),
+      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
       InspectionField(key: 'radiator', label: 'Radiator', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'allHosePipes', label: 'All Hose Pipes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'fuelSystem', label: 'Fuel System', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -234,7 +257,7 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
       InspectionField(key: 'frontBrakes', label: 'Front Brakes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'rearBrakes', label: 'Rear Brakes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'parkingBrake', label: 'Parking Brake', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'abs', label: 'ABS', type: FieldType.condition, defaultValue: 'NO'),
+      InspectionField(key: 'abs', label: 'ABS', type: FieldType.condition, defaultValue: 'NO', scored: false),
     ]),
     InspectionSection(section: 'STEERING SYSTEM', fields: [
       InspectionField(key: 'steeringWheel', label: 'Steering Wheel', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -252,7 +275,6 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
       InspectionField(key: 'doors', label: 'Doors', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'allGlasses', label: 'All Glasses', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'sideFenders', label: 'Side Fenders', type: FieldType.condition, defaultValue: 'GOOD'),
-      // Not on the 4W sheet; kept on request (2026-09-17), as in the portal.
       InspectionField(key: 'paintWork', label: 'Paint Work', type: FieldType.condition, defaultValue: 'GOOD'),
     ]),
     InspectionSection(section: 'INTERIOR', fields: [
@@ -269,16 +291,16 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
     ]),
     InspectionSection(section: 'TIRES', fields: [
       InspectionField(key: 'tyreCondition', label: 'Tyre Condition', type: FieldType.condition, defaultValue: 'AVERAGE'),
-      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number),
-      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0'),
+      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number, scored: false),
+      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0', scoring: FieldScoring.zeroIsGood),
     ]),
     InspectionSection(section: 'FUNCTIONALITY', fields: [
       InspectionField(key: 'engineStarted', label: 'Engine Started', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'testDrive', label: 'Test Drive', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'vehicleMoved', label: 'Vehicle Moved', type: FieldType.condition, defaultValue: 'YES'),
-      InspectionField(key: 'warningLights', label: 'Warning Lights', type: FieldType.condition, defaultValue: 'YES'),
+      InspectionField(key: 'warningLights', label: 'Warning Lights On', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
     ]),
-    InspectionSection(section: 'OTHER SYSTEMS', fields: [
+    InspectionSection(section: 'OTHER SYSTEMS', scored: false, fields: [
       InspectionField(key: 'audio', label: 'Audio', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'airConditioner', label: 'Air Conditioner', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'upholstery', label: 'Upholstery', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -294,7 +316,7 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
   VehicleTypeKey.tw: [
     InspectionSection(section: 'ENGINE CONDITION', fields: [
       InspectionField(key: 'engineCondition', label: 'Engine Condition', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO'),
+      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
       InspectionField(key: 'radiator', label: 'Radiator', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'allHosePipes', label: 'All Hose Pipes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'fuelSystem', label: 'Fuel System', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -308,7 +330,7 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
       InspectionField(key: 'frontBrakes', label: 'Front Brake', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'rearBrakes', label: 'Rear Brake', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'brakeLeversFluid', label: 'Brake Levers / Fluid', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'abs', label: 'ABS', type: FieldType.condition, defaultValue: 'NO'),
+      InspectionField(key: 'abs', label: 'ABS', type: FieldType.condition, defaultValue: 'NO', scored: false),
     ]),
     InspectionSection(section: 'STEERING SYSTEM', fields: [
       InspectionField(key: 'handleBar', label: 'Handle Bar', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -342,16 +364,16 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
     ]),
     InspectionSection(section: 'TIRES', fields: [
       InspectionField(key: 'tyreCondition', label: 'Tyre Condition', type: FieldType.condition, defaultValue: 'AVERAGE'),
-      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number),
-      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0'),
+      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number, scored: false),
+      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0', scoring: FieldScoring.zeroIsGood),
     ]),
     InspectionSection(section: 'FUNCTIONALITY', fields: [
       InspectionField(key: 'engineStarted', label: 'Engine Started', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'testDrive', label: 'Test Ride', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'vehicleMoved', label: 'Vehicle Moved', type: FieldType.condition, defaultValue: 'YES'),
-      InspectionField(key: 'warningLights', label: 'Warning Lights', type: FieldType.condition, defaultValue: 'YES'),
+      InspectionField(key: 'warningLights', label: 'Warning Lights On', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
     ]),
-    InspectionSection(section: 'OTHER SYSTEMS', fields: [
+    InspectionSection(section: 'OTHER SYSTEMS', scored: false, fields: [
       InspectionField(key: 'mainStand', label: 'Main Stand', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'sideStand', label: 'Side Stand', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'horn', label: 'Horn', type: FieldType.condition, defaultValue: 'NO'),
@@ -367,7 +389,7 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
   VehicleTypeKey.thrw: [
     InspectionSection(section: 'ENGINE CONDITION', fields: [
       InspectionField(key: 'engineCondition', label: 'Engine Condition', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO'),
+      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
       InspectionField(key: 'radiator', label: 'Radiator', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'allHosePipes', label: 'All Hose Pipes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'fuelSystem', label: 'Fuel System', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -381,7 +403,7 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
       InspectionField(key: 'frontBrakes', label: 'Front Brakes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'rearBrakes', label: 'Rear Brakes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'parkingBrake', label: 'Parking Brake', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'abs', label: 'ABS', type: FieldType.condition, defaultValue: 'NO'),
+      InspectionField(key: 'abs', label: 'ABS', type: FieldType.condition, defaultValue: 'NO', scored: false),
     ]),
     InspectionSection(section: 'STEERING SYSTEM', fields: [
       InspectionField(key: 'steeringHandle', label: 'Steering Handle', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -417,16 +439,16 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
     ]),
     InspectionSection(section: 'TIRES', fields: [
       InspectionField(key: 'tyreCondition', label: 'Tyre Condition', type: FieldType.condition, defaultValue: 'AVERAGE'),
-      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number),
-      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0'),
+      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number, scored: false),
+      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0', scoring: FieldScoring.zeroIsGood),
     ]),
     InspectionSection(section: 'FUNCTIONALITY', fields: [
       InspectionField(key: 'engineStarted', label: 'Engine Started', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'testDrive', label: 'Test Drive', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'vehicleMoved', label: 'Vehicle Moved', type: FieldType.condition, defaultValue: 'YES'),
-      InspectionField(key: 'warningLights', label: 'Warning Lights', type: FieldType.condition, defaultValue: 'YES'),
+      InspectionField(key: 'warningLights', label: 'Warning Lights On', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
     ]),
-    InspectionSection(section: 'OTHER SYSTEMS', fields: [
+    InspectionSection(section: 'OTHER SYSTEMS', scored: false, fields: [
       InspectionField(key: 'audio', label: 'Audio', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'upholstery', label: 'Upholstery', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'loadCarrier', label: 'Load Carrier', type: FieldType.condition, defaultValue: 'YES'),
@@ -442,7 +464,7 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
   VehicleTypeKey.ce: [
     InspectionSection(section: 'ENGINE CONDITION', fields: [
       InspectionField(key: 'engineCondition', label: 'Engine Condition', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO'),
+      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
       InspectionField(key: 'radiator', label: 'Radiator', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'hydraulicOilCooler', label: 'Hydraulic Oil Cooler', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'fuelSystem', label: 'Fuel System', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -490,16 +512,16 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
     ]),
     InspectionSection(section: 'TIRE / TRACK', fields: [
       InspectionField(key: 'tyreCondition', label: 'Tyre / Track Condition', type: FieldType.condition, defaultValue: 'AVERAGE'),
-      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres / Tracks', type: FieldType.number),
-      InspectionField(key: 'missingTyres', label: 'Missing / Damaged', type: FieldType.number, defaultValue: '0'),
+      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres / Tracks', type: FieldType.number, scored: false),
+      InspectionField(key: 'missingTyres', label: 'Missing / Damaged', type: FieldType.number, defaultValue: '0', scoring: FieldScoring.zeroIsGood),
     ]),
     InspectionSection(section: 'FUNCTIONALITY', fields: [
       InspectionField(key: 'engineStarted', label: 'Engine Started', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'testDrive', label: 'Functional Test', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'vehicleMoved', label: 'Machine Moved', type: FieldType.condition, defaultValue: 'YES'),
-      InspectionField(key: 'warningLights', label: 'Warning Lights', type: FieldType.condition, defaultValue: 'YES'),
+      InspectionField(key: 'warningLights', label: 'Warning Lights On', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
     ]),
-    InspectionSection(section: 'OTHER SYSTEMS', fields: [
+    InspectionSection(section: 'OTHER SYSTEMS', scored: false, fields: [
       InspectionField(key: 'swingMechanism', label: 'Swing Mechanism', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'trackChains', label: 'Track Chains', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'sprockets', label: 'Sprockets', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -509,13 +531,10 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
     ]),
   ],
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // BUS
-  // ═══════════════════════════════════════════════════════════════════════════
   VehicleTypeKey.bus: [
     InspectionSection(section: 'ENGINE CONDITION', fields: [
       InspectionField(key: 'engineCondition', label: 'Engine Condition', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO'),
+      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
       InspectionField(key: 'radiator', label: 'Radiator', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'allHosePipes', label: 'All Hose Pipes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'fuelSystem', label: 'Fuel System', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -529,7 +548,7 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
       InspectionField(key: 'frontBrakes', label: 'Front Brakes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'rearBrakes', label: 'Rear Brakes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'parkingBrake', label: 'Parking Brake', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'abs', label: 'ABS', type: FieldType.condition, defaultValue: 'YES'),
+      InspectionField(key: 'abs', label: 'ABS', type: FieldType.condition, defaultValue: 'YES', scored: false),
     ]),
     InspectionSection(section: 'STEERING SYSTEM', fields: [
       InspectionField(key: 'steeringWheel', label: 'Steering Wheel', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -565,16 +584,16 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
     ]),
     InspectionSection(section: 'TIRES', fields: [
       InspectionField(key: 'tyreCondition', label: 'Tyre Condition', type: FieldType.condition, defaultValue: 'AVERAGE'),
-      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number),
-      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0'),
+      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number, scored: false),
+      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0', scoring: FieldScoring.zeroIsGood),
     ]),
     InspectionSection(section: 'FUNCTIONALITY', fields: [
       InspectionField(key: 'engineStarted', label: 'Engine Started', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'testDrive', label: 'Test Drive', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'vehicleMoved', label: 'Vehicle Moved', type: FieldType.condition, defaultValue: 'YES'),
-      InspectionField(key: 'warningLights', label: 'Warning Lights', type: FieldType.condition, defaultValue: 'YES'),
+      InspectionField(key: 'warningLights', label: 'Warning Lights On', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
     ]),
-    InspectionSection(section: 'OTHER SYSTEMS', fields: [
+    InspectionSection(section: 'OTHER SYSTEMS', scored: false, fields: [
       InspectionField(key: 'airConditioner', label: 'Air Conditioner', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'audio', label: 'Audio', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'upholstery', label: 'Upholstery', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -590,7 +609,7 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
   VehicleTypeKey.fe: [
     InspectionSection(section: 'ENGINE CONDITION', fields: [
       InspectionField(key: 'engineCondition', label: 'Engine Condition', type: FieldType.condition, defaultValue: 'GOOD'),
-      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO'),
+      InspectionField(key: 'fluidLeaks', label: 'Fluid Leaks', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
       InspectionField(key: 'radiator', label: 'Radiator', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'allHosePipes', label: 'All Hose Pipes', type: FieldType.condition, defaultValue: 'GOOD'),
       InspectionField(key: 'fuelSystem', label: 'Fuel System', type: FieldType.condition, defaultValue: 'GOOD'),
@@ -640,16 +659,16 @@ const Map<VehicleTypeKey, List<InspectionSection>> fieldRegistry = {
     ]),
     InspectionSection(section: 'TIRES', fields: [
       InspectionField(key: 'tyreCondition', label: 'Tyre Condition', type: FieldType.condition, defaultValue: 'AVERAGE'),
-      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number),
-      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0'),
+      InspectionField(key: 'numberOfTyres', label: 'Number of Tyres', type: FieldType.number, scored: false),
+      InspectionField(key: 'missingTyres', label: 'Missing Tyres', type: FieldType.number, defaultValue: '0', scoring: FieldScoring.zeroIsGood),
     ]),
     InspectionSection(section: 'FUNCTIONALITY', fields: [
       InspectionField(key: 'engineStarted', label: 'Engine Started', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'testDrive', label: 'Field Function Test', type: FieldType.condition, defaultValue: 'YES'),
       InspectionField(key: 'vehicleMoved', label: 'Vehicle Moved', type: FieldType.condition, defaultValue: 'YES'),
-      InspectionField(key: 'warningLights', label: 'Warning Lights', type: FieldType.condition, defaultValue: 'YES'),
+      InspectionField(key: 'warningLights', label: 'Warning Lights On', type: FieldType.condition, defaultValue: 'NO', scoring: FieldScoring.noIsGood),
     ]),
-    InspectionSection(section: 'OTHER SYSTEMS', fields: [
+    InspectionSection(section: 'OTHER SYSTEMS', scored: false, fields: [
       InspectionField(key: 'muffler', label: 'Muffler', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'airFilter', label: 'Air Filter', type: FieldType.condition, defaultValue: 'NO'),
       InspectionField(key: 'attachmentHitch', label: 'Attachment Hitch', type: FieldType.condition, defaultValue: 'GOOD'),
